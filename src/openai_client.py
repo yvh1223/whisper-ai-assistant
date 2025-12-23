@@ -379,9 +379,10 @@ Return ONLY valid JSON, no markdown formatting or code blocks."""
             # Use appropriate token limits and temperature
             if self.task_model.startswith('gpt-5'):
                 kwargs['max_completion_tokens'] = 200
-                # GPT-5 Nano only supports temperature=1
-                if 'nano' not in self.task_model.lower():
-                    kwargs['temperature'] = 0.3
+                # GPT-5 models only support temperature=1 (default)
+            elif self.task_model.startswith('gpt-4o'):
+                kwargs['max_tokens'] = 200
+                # gpt-4o models only support temperature=1 (default)
             else:
                 kwargs['max_tokens'] = 200
                 kwargs['temperature'] = 0.3  # Lower temp for structured output
