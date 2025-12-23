@@ -63,8 +63,7 @@ class WhisperDictationApp(rumps.App):
         # Add TTS menu item
         self.tts_menu_item = rumps.MenuItem("Read Selected Text Aloud")
 
-        # Create task submenu
-        self.task_submenu = rumps.MenuItem("Tasks")
+        # Task submenu will be created in setup_task_menu()
         self.setup_task_menu()
 
         self.menu = [
@@ -622,8 +621,11 @@ class WhisperDictationApp(rumps.App):
 
     def setup_task_menu(self):
         """Setup/refresh task submenu with current tasks"""
-        # Clear existing items
-        self.task_submenu.clear()
+        # Create submenu if it doesn't exist, otherwise clear it
+        if not hasattr(self, 'task_submenu'):
+            self.task_submenu = rumps.MenuItem("Tasks")
+        elif hasattr(self.task_submenu, '_menu') and self.task_submenu._menu is not None:
+            self.task_submenu.clear()
 
         # Static items
         add_item = rumps.MenuItem("Add Task (voice)", callback=self.prompt_task_recording)
