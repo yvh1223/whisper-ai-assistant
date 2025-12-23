@@ -113,6 +113,7 @@ class WhisperDictationApp(rumps.App):
         logger.info("Started WhisperDictation app. Look for 🎙️ in your menu bar.")
         logger.info("Press and hold the Globe/Fn key (vk=63) to record. Release to transcribe.")
         logger.info("Alternatively, hold Right Shift to record (release after 0.75s to process, before to discard).")
+        logger.info("Multi-language support: Speak in any language (Hindi, English, etc.) → Output in English")
         logger.info("Press Ctrl+C to quit the application.")
         logger.info("You may need to grant this app accessibility permissions in System Preferences.")
         logger.info("Go to System Preferences → Security & Privacy → Privacy → Accessibility")
@@ -164,7 +165,7 @@ class WhisperDictationApp(rumps.App):
         self.title = "🎙️ (Loading...)"
         self.status_item.title = "Status: Loading Whisper model..."
         try:
-            self.model = faster_whisper.WhisperModel("medium.en")
+            self.model = faster_whisper.WhisperModel("medium.en", compute_type="float32")
             self.title = "🎙️"
             self.status_item.title = "Status: Ready"
             logger.info("Whisper model loaded successfully!")
@@ -313,12 +314,24 @@ class WhisperDictationApp(rumps.App):
             self.start_recording()
             sender.title = "Stop Recording"
         else:
-            self.stop_recording()
-            sender.title = "Start Recording"
+            # Run stop_recording in a background thread to avoid blocking the UI
+            stop_thread = threading.Thread(target=self._stop_recording_from_menu, args=(sender,))
+            stop_thread.start()
+
+    def _stop_recording_from_menu(self, sender):
+        """Helper to stop recording from menu and update title"""
+        self.stop_recording()
+        sender.title = "Start Recording"
 
     @rumps.clicked("Read Selected Text Aloud")
     def read_selected_text(self, sender):
         """Read selected text using TTS"""
+        # Run in background thread to avoid blocking UI
+        tts_thread = threading.Thread(target=self._read_selected_text_worker)
+        tts_thread.start()
+
+    def _read_selected_text_worker(self):
+        """Worker function to read selected text using TTS"""
         try:
             # Get selected text
             selected_text = self.text_selector.get_selected_text()
@@ -390,7 +403,7 @@ class WhisperDictationApp(rumps.App):
     def stop_recording(self):
         self.recording = False
         if hasattr(self, 'recording_thread'):
-            self.recording_thread.join()
+            self.recording_thread.join(timeout=2.0)  # Add timeout to prevent indefinite blocking
 
         # Hide recording indicator
         self.indicator.stop()
@@ -488,16 +501,18 @@ class WhisperDictationApp(rumps.App):
         logger.debug("Audio saved to temporary file. Transcribing...")
 
         # Transcribe with Whisper (OpenAI API or local model)
+        # Both modes auto-detect language and translate to English
         try:
             # Check if we should use OpenAI Whisper API
             if self.openai_client.is_available() and self.openai_client.use_openai_whisper:
-                logger.debug("Using OpenAI Whisper API for transcription...")
+                logger.debug("Using OpenAI Whisper API (auto-detect → English)...")
                 text = self.openai_client.transcribe_audio(temp_filename)
             else:
-                # Use local Whisper model
-                logger.debug("Using local Whisper model for transcription...")
+                # Use local Whisper model with translation to English
+                logger.debug("Using local Whisper model (auto-detect → English)...")
                 try:
-                    segments, _ = self.model.transcribe(temp_filename, beam_size=5)
+                    # task="translate" auto-detects language and translates to English
+                    segments, _ = self.model.transcribe(temp_filename, beam_size=5, task="translate")
 
                     text = ""
                     for segment in segments:
@@ -628,10 +643,12 @@ class WhisperDictationApp(rumps.App):
             self.task_submenu.clear()
 
         # Static items
-        add_item = rumps.MenuItem("Add Task (voice)", callback=self.prompt_task_recording)
+        add_voice_item = rumps.MenuItem("Add Task (voice)", callback=self.prompt_task_recording)
+        add_text_item = rumps.MenuItem("Add Task (type)", callback=self.prompt_task_typing)
         list_item = rumps.MenuItem("List All Tasks", callback=self.list_tasks_via_voice)
 
-        self.task_submenu.add(add_item)
+        self.task_submenu.add(add_voice_item)
+        self.task_submenu.add(add_text_item)
         self.task_submenu.add(list_item)
         self.task_submenu.add(rumps.separator)
 
@@ -806,6 +823,85 @@ class WhisperDictationApp(rumps.App):
     def prompt_task_recording(self, sender):
         """Start recording specifically for task command"""
         self.start_recording()
+
+    def prompt_task_typing(self, sender):
+        """Open text input window for typing task"""
+        window = rumps.Window(
+            message="Type your task using natural language:\n\nExamples:\n• buy milk tomorrow\n• call dentist high priority\n• finish report by friday\n• meeting at 3pm today",
+            title="Add Task",
+            default_text="",
+            ok="Add Task",
+            cancel="Cancel",
+            dimensions=(400, 24)
+        )
+        response = window.run()
+
+        if response.clicked:
+            # User clicked "Add Task"
+            task_text = response.text.strip()
+            if task_text:
+                # Auto-prepend "task add" if user didn't type it
+                if not task_text.lower().startswith('task'):
+                    task_text = f"task add {task_text}"
+                logger.info(f"Processing typed task command: {task_text}")
+                # Process the task command
+                threading.Thread(target=self._process_typed_task, args=(task_text,)).start()
+            else:
+                logger.warning("Empty task text - ignoring")
+
+    def _process_typed_task(self, task_text):
+        """Process typed task command in background thread"""
+        try:
+            # Parse command
+            parsed = self.task_manager.parse_command(task_text)
+
+            if not parsed or 'action' not in parsed:
+                self.status_item.title = "Status: Could not understand task"
+                logger.warning(f"Could not parse task command: {task_text}")
+                return
+
+            # Execute action
+            if parsed['action'] == 'add':
+                task = self.task_manager.add_task(
+                    description=parsed.get('description'),
+                    priority=parsed.get('priority'),
+                    due_date=parsed.get('due_date'),
+                    category=parsed.get('category')
+                )
+                feedback = self.format_task_added_feedback(task)
+                logger.info(f"✓ {feedback}")
+                self.status_item.title = f"Status: ✓ Task added"
+
+            elif parsed['action'] == 'complete':
+                task = self.task_manager.complete_task(parsed.get('identifier'))
+                if task:
+                    logger.info(f"✓ Completed task: {task['description']}")
+                    self.status_item.title = "Status: ✓ Task completed"
+                else:
+                    logger.warning("Could not find that task")
+                    self.status_item.title = "Status: Task not found"
+
+            elif parsed['action'] == 'list':
+                tasks = self.task_manager.list_tasks(filter_type=parsed.get('filter') or 'pending')
+                feedback = self.format_task_list_feedback(tasks)
+                logger.info(feedback)
+                self.status_item.title = f"Status: {len(tasks)} tasks listed"
+
+            elif parsed['action'] == 'archive':
+                task = self.task_manager.archive_task(parsed.get('identifier'))
+                if task:
+                    logger.info(f"✓ Archived task: {task['description']}")
+                    self.status_item.title = "Status: ✓ Task archived"
+                else:
+                    logger.warning("Could not find that task")
+                    self.status_item.title = "Status: Task not found"
+
+            # Refresh menu
+            self.setup_task_menu()
+
+        except Exception as e:
+            logger.error(f"Error processing typed task: {e}")
+            self.status_item.title = "Status: Task error"
 
     def list_tasks_via_voice(self, sender):
         """List all tasks via TTS"""
