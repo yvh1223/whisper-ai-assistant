@@ -236,10 +236,6 @@ class WhisperDictationApp(rumps.App):
         self.title = "🎙️"
         self.status_item.title = "Status: Recording discarded (too short)"
         logger.info("Recording discarded - held for less than threshold")
-
-        # Update task voice menu item if it exists
-        if hasattr(self, 'task_voice_item'):
-            self.task_voice_item.title = "Add Task (voice)"
     
     def monitor_keys(self):
         # Track state of key 63 (Globe/Fn key)
@@ -397,10 +393,6 @@ class WhisperDictationApp(rumps.App):
         self.status_item.title = "Status: Recording..."
         logger.info("Recording started. Speak now...")
 
-        # Update task voice menu item if it exists
-        if hasattr(self, 'task_voice_item'):
-            self.task_voice_item.title = "Stop Recording"
-
         # Show recording indicator
         self.indicator.start()
 
@@ -415,10 +407,6 @@ class WhisperDictationApp(rumps.App):
 
         # Hide recording indicator
         self.indicator.stop()
-
-        # Update task voice menu item if it exists
-        if hasattr(self, 'task_voice_item'):
-            self.task_voice_item.title = "Add Task (voice)"
 
         # Check for selected text NOW (while focus might still be on the text editor)
         self.cached_selected_text = self.text_selector.get_selected_text()
@@ -654,17 +642,10 @@ class WhisperDictationApp(rumps.App):
         elif hasattr(self.task_submenu, '_menu') and self.task_submenu._menu is not None:
             self.task_submenu.clear()
 
-        # Static items - create as instance variables so they can be updated
-        if not hasattr(self, 'task_voice_item'):
-            self.task_voice_item = rumps.MenuItem("Add Task (voice)", callback=self.toggle_task_recording)
-        else:
-            # Update title based on recording state
-            self.task_voice_item.title = "Stop Recording" if self.recording else "Add Task (voice)"
-
+        # Static items
         add_text_item = rumps.MenuItem("Add Task (type)", callback=self.prompt_task_typing)
         list_item = rumps.MenuItem("List All Tasks", callback=self.list_tasks_via_voice)
 
-        self.task_submenu.add(self.task_voice_item)
         self.task_submenu.add(add_text_item)
         self.task_submenu.add(list_item)
         self.task_submenu.add(rumps.separator)
@@ -841,26 +822,6 @@ class WhisperDictationApp(rumps.App):
             self.setup_task_menu()
         except Exception as e:
             logger.error(f"Error toggling task: {e}")
-
-    def toggle_task_recording(self, sender):
-        """Toggle recording for task command"""
-        if not self.recording:
-            # Start recording
-            self.start_recording()
-            sender.title = "Stop Recording"
-            self.recording_menu_item.title = "Stop Recording"
-
-            # Show notification with instructions
-            rumps.notification(
-                title="Recording Started",
-                subtitle="Speak your task now",
-                message="Click the menu bar icon → 'Stop Recording' when done, or press Globe/Fn key"
-            )
-        else:
-            # Stop recording
-            self.stop_recording()
-            sender.title = "Add Task (voice)"
-            self.recording_menu_item.title = "Start Recording"
 
     def prompt_task_typing(self, sender):
         """Open text input window for typing task using native AppKit dialog"""
