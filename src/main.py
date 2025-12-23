@@ -828,6 +828,8 @@ class WhisperDictationApp(rumps.App):
     def prompt_task_recording(self, sender):
         """Start recording specifically for task command"""
         self.start_recording()
+        # Update main recording menu item to show "Stop Recording"
+        self.recording_menu_item.title = "Stop Recording"
 
     def prompt_task_typing(self, sender):
         """Open text input window for typing task using native AppKit dialog"""
