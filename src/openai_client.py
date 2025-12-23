@@ -15,6 +15,7 @@ class OpenAIClient:
         """Initialize OpenAI client"""
         self.api_key = os.getenv('OPENAI_API_KEY')
         self.model = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
+        self.task_model = os.getenv('OPENAI_TASK_MODEL', 'gpt-5-mini')  # Separate model for task parsing
         self.whisper_model = os.getenv('OPENAI_WHISPER_MODEL', 'gpt-4o-mini-transcribe')
         self.tts_model = os.getenv('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts')
         self.tts_voice = os.getenv('OPENAI_TTS_VOICE', 'alloy')
@@ -52,6 +53,7 @@ class OpenAIClient:
                 )
                 logger.info(f"OpenAI client initialized")
                 logger.info(f"  - Text model: {self.model}")
+                logger.info(f"  - Task model: {self.task_model}")
                 logger.info(f"  - Whisper model: {self.whisper_model} (enabled: {self.use_openai_whisper})")
                 logger.info(f"  - Whisper mode: Auto-detect language → Transcribe → Auto-translate to English")
                 logger.info(f"  - TTS model: {self.tts_model}")
@@ -364,7 +366,7 @@ Return ONLY valid JSON, no markdown formatting or code blocks."""
 
         try:
             kwargs = {
-                "model": self.model,
+                "model": self.task_model,
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -372,10 +374,10 @@ Return ONLY valid JSON, no markdown formatting or code blocks."""
             }
 
             # Use appropriate token limits and temperature
-            if self.model.startswith('gpt-5'):
+            if self.task_model.startswith('gpt-5'):
                 kwargs['max_completion_tokens'] = 200
                 # GPT-5 Nano only supports temperature=1
-                if 'nano' not in self.model.lower():
+                if 'nano' not in self.task_model.lower():
                     kwargs['temperature'] = 0.3
             else:
                 kwargs['max_tokens'] = 200
