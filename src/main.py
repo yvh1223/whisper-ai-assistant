@@ -12,6 +12,7 @@ from pynput import keyboard
 from pynput.keyboard import Key, Controller
 import faster_whisper
 import signal
+from AppKit import NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn
 from text_selection import TextSelection
 from openai_client import OpenAIClient
 from task_manager import TaskManager
@@ -833,19 +834,30 @@ class WhisperDictationApp(rumps.App):
         self.start_recording()
 
     def prompt_task_typing(self, sender):
-        """Open text input window for typing task"""
-        window = rumps.Window(
-            message="Type your task (e.g., 'buy milk tomorrow' or 'call dentist high priority')",
-            title="Add Task",
-            default_text="",
-            ok="Add Task",
-            cancel="Cancel"
-        )
-        response = window.run()
+        """Open text input window for typing task using native AppKit dialog"""
+        from AppKit import NSTextField, NSMakeRect
 
-        if response.clicked:
+        # Create alert
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Add Task")
+        alert.setInformativeText_("Type your task (e.g., 'buy milk tomorrow' or 'call dentist high priority')")
+        alert.addButtonWithTitle_("Add Task")
+        alert.addButtonWithTitle_("Cancel")
+
+        # Create text field
+        text_field = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, 300, 24))
+        text_field.setStringValue_("")
+        alert.setAccessoryView_(text_field)
+
+        # Make text field first responder
+        alert.window().setInitialFirstResponder_(text_field)
+
+        # Run alert
+        response = alert.runModal()
+
+        if response == NSAlertFirstButtonReturn:
             # User clicked "Add Task"
-            task_text = response.text.strip()
+            task_text = str(text_field.stringValue()).strip()
             if task_text:
                 # Auto-prepend "task add" if user didn't type it
                 if not task_text.lower().startswith('task'):
