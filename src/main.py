@@ -63,7 +63,16 @@ class WhisperDictationApp(rumps.App):
         # Add TTS menu item
         self.tts_menu_item = rumps.MenuItem("Read Selected Text Aloud")
 
-        # Task submenu will be created in setup_task_menu()
+        # Initialize text selection handler
+        self.text_selector = TextSelection()
+
+        # Initialize OpenAI client
+        self.openai_client = OpenAIClient()
+
+        # Initialize TaskManager
+        self.task_manager = TaskManager(openai_client=self.openai_client)
+
+        # Task submenu will be created in setup_task_menu() (must be after task_manager init)
         self.setup_task_menu()
 
         self.menu = [
@@ -74,15 +83,6 @@ class WhisperDictationApp(rumps.App):
             None,
             self.status_item
         ]
-
-        # Initialize text selection handler
-        self.text_selector = TextSelection()
-
-        # Initialize OpenAI client
-        self.openai_client = OpenAIClient()
-
-        # Initialize TaskManager
-        self.task_manager = TaskManager(openai_client=self.openai_client)
 
         # Initialize recording indicator
         self.indicator = RecordingIndicator()
