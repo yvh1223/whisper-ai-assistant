@@ -79,7 +79,6 @@ class WhisperDictationApp(rumps.App):
         self.menu = [
             self.recording_menu_item,
             self.tts_menu_item,
-            self.mic_submenu,
             self.task_submenu,
             None,
             self.status_item
@@ -653,11 +652,8 @@ class WhisperDictationApp(rumps.App):
         self.task_submenu.add(list_item)
         self.task_submenu.add(rumps.separator)
 
-        # Dynamic task items (top 5 pending + 2 recent completed)
-        pending_tasks = self.task_manager.get_tasks(limit=5, status='pending')
-        completed_tasks = self.task_manager.get_tasks(limit=2, status='completed')
-
-        tasks = pending_tasks + completed_tasks
+        # Dynamic task items (top 10 pending only)
+        tasks = self.task_manager.get_tasks(limit=10, status='pending')
 
         for task in tasks:
             icon = "[ ]" if task['status'] == 'pending' else "[✓]"
