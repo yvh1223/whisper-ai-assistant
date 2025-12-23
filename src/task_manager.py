@@ -75,20 +75,18 @@ class TaskManager:
         Returns:
             dict: Parsed command structure or None if parsing fails
         """
-        # Try GPT parsing first if available
-        if self.openai_client and self.openai_client.is_available():
-            try:
-                current_date = datetime.now().strftime('%Y-%m-%d')
-                parsed = self.openai_client.parse_task_command(text, current_date)
-                if parsed:
-                    return parsed
-                # If GPT returns None, fall through to simple parser
-                logger.info("GPT parsing returned None, trying fallback parser")
-            except Exception as e:
-                logger.error(f"Error with GPT parsing: {e}, trying fallback parser")
+        # Only use GPT parsing - no fallback
+        if not self.openai_client or not self.openai_client.is_available():
+            logger.error("OpenAI client not available - task parsing disabled")
+            return None
 
-        # Fallback: simple parser for basic cases
-        return self._simple_parse(text)
+        try:
+            current_date = datetime.now().strftime('%Y-%m-%d')
+            parsed = self.openai_client.parse_task_command(text, current_date)
+            return parsed
+        except Exception as e:
+            logger.error(f"Error with GPT parsing: {e}")
+            return None
 
     def _simple_parse(self, text):
         """

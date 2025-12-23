@@ -387,15 +387,20 @@ Return ONLY valid JSON, no markdown formatting or code blocks."""
                 kwargs['max_tokens'] = 200
                 kwargs['temperature'] = 0.3  # Lower temp for structured output
 
-            logger.debug(f"Calling OpenAI with model={self.task_model}")
+            logger.info(f"Calling OpenAI with model={self.task_model} for: {text}")
             response = self.client.chat.completions.create(**kwargs)
+
+            logger.info(f"Full response: {response}")
+            logger.info(f"Choices: {response.choices if response.choices else 'None'}")
 
             if response.choices and len(response.choices) > 0:
                 content = response.choices[0].message.content
-                logger.debug(f"Raw GPT response content: {repr(content)}")
+                logger.info(f"Raw GPT response content: {repr(content)}")
+                logger.info(f"Content type: {type(content)}")
 
                 if not content:
-                    logger.error("GPT returned empty content")
+                    logger.error("GPT returned empty content - this is a bug")
+                    logger.error(f"Full message object: {response.choices[0].message}")
                     return None
 
                 json_str = content.strip()
