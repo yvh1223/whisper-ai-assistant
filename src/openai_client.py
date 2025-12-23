@@ -15,7 +15,7 @@ class OpenAIClient:
         """Initialize OpenAI client"""
         self.api_key = os.getenv('OPENAI_API_KEY')
         self.model = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
-        self.task_model = os.getenv('OPENAI_TASK_MODEL', 'gpt-5-mini')  # Separate model for task parsing
+        self.task_model = os.getenv('OPENAI_TASK_MODEL', 'gpt-4o-mini')  # Separate model for task parsing (use gpt-4o-mini if gpt-5-mini not available)
         self.whisper_model = os.getenv('OPENAI_WHISPER_MODEL', 'gpt-4o-mini-transcribe')
         self.tts_model = os.getenv('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts')
         self.tts_voice = os.getenv('OPENAI_TTS_VOICE', 'alloy')
@@ -364,6 +364,9 @@ Return ONLY valid JSON, no markdown formatting or code blocks."""
 
         user_prompt = f"Parse this voice command: \"{text}\"\n\nCurrent date: {current_date}"
 
+        import json
+        json_str = None
+
         try:
             kwargs = {
                 "model": self.task_model,
@@ -383,6 +386,7 @@ Return ONLY valid JSON, no markdown formatting or code blocks."""
                 kwargs['max_tokens'] = 200
                 kwargs['temperature'] = 0.3  # Lower temp for structured output
 
+            logger.debug(f"Calling OpenAI with model={self.task_model}")
             response = self.client.chat.completions.create(**kwargs)
 
             if response.choices and len(response.choices) > 0:
@@ -390,7 +394,6 @@ Return ONLY valid JSON, no markdown formatting or code blocks."""
                 # Remove markdown code blocks if present
                 json_str = json_str.replace('```json', '').replace('```', '').strip()
 
-                import json
                 parsed = json.loads(json_str)
                 logger.debug(f"Parsed task command: {parsed}")
                 return parsed
@@ -399,10 +402,12 @@ Return ONLY valid JSON, no markdown formatting or code blocks."""
 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse GPT response as JSON: {e}")
-            logger.error(f"Response was: {json_str}")
+            logger.error(f"Response was: {json_str if json_str else '(no response)'}")
             return None
         except Exception as e:
             logger.error(f"Error parsing task command with GPT: {e}")
+            if hasattr(e, 'response'):
+                logger.error(f"API Error Details: {e.response}")
             logger.warning("GPT parsing failed, will use fallback parser")
             return None
 
