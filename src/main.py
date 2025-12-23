@@ -685,7 +685,9 @@ class WhisperDictationApp(rumps.App):
             parsed = self.task_manager.parse_command(text)
 
             if not parsed or 'action' not in parsed:
-                self.speak_feedback("Sorry, I didn't understand that task command")
+                logger.warning("Could not parse task command")
+                self.status_item.title = "Status: Could not understand task command"
+                self.title = "🎙️"
                 return
 
             # Execute action
@@ -697,35 +699,41 @@ class WhisperDictationApp(rumps.App):
                     category=parsed.get('category')
                 )
                 feedback = self.format_task_added_feedback(task)
-                self.speak_feedback(feedback)
+                logger.info(f"✓ {feedback}")
+                self.status_item.title = f"Status: ✓ Task added"
 
             elif parsed['action'] == 'complete':
                 task = self.task_manager.complete_task(parsed.get('identifier'))
                 if task:
-                    self.speak_feedback(f"Completed task: {task['description']}")
+                    logger.info(f"✓ Completed: {task['description']}")
+                    self.status_item.title = f"Status: ✓ Completed task"
                 else:
-                    self.speak_feedback("Could not find that task")
+                    logger.warning("Task not found")
+                    self.status_item.title = "Status: Task not found"
 
             elif parsed['action'] == 'list':
                 tasks = self.task_manager.list_tasks(filter_type=parsed.get('filter') or 'pending')
                 feedback = self.format_task_list_feedback(tasks)
-                self.speak_feedback(feedback)
+                logger.info(feedback)
+                self.status_item.title = f"Status: {len(tasks)} pending task(s)"
 
             elif parsed['action'] == 'archive':
                 task = self.task_manager.archive_task(parsed.get('identifier'))
                 if task:
-                    self.speak_feedback(f"Archived task: {task['description']}")
+                    logger.info(f"✓ Archived: {task['description']}")
+                    self.status_item.title = f"Status: ✓ Archived task"
                 else:
-                    self.speak_feedback("Could not find that task")
+                    logger.warning("Task not found")
+                    self.status_item.title = "Status: Task not found"
 
             # Refresh menu
             self.setup_task_menu()
-            self.status_item.title = "Status: ✓ Task updated"
+            self.title = "🎙️"
 
         except Exception as e:
             logger.error(f"Error processing task command: {e}")
-            self.speak_feedback("Sorry, there was an error processing that task")
             self.status_item.title = f"Status: Task error"
+            self.title = "🎙️"
 
     def speak_feedback(self, message):
         """Speak feedback using TTS"""
@@ -904,13 +912,15 @@ class WhisperDictationApp(rumps.App):
             self.status_item.title = "Status: Task error"
 
     def list_tasks_via_voice(self, sender):
-        """List all tasks via TTS"""
+        """List all tasks (show in status and log)"""
         try:
             tasks = self.task_manager.list_tasks(filter_type='pending')
             feedback = self.format_task_list_feedback(tasks)
-            self.speak_feedback(feedback)
+            logger.info(feedback)
+            self.status_item.title = f"Status: {len(tasks)} pending task(s)"
         except Exception as e:
             logger.error(f"Error listing tasks: {e}")
+            self.status_item.title = "Status: Error listing tasks"
 
     def open_task_file(self, sender):
         """Open task JSON file in default editor"""

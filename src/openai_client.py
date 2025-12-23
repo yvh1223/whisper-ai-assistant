@@ -53,6 +53,7 @@ class OpenAIClient:
                 logger.info(f"OpenAI client initialized")
                 logger.info(f"  - Text model: {self.model}")
                 logger.info(f"  - Whisper model: {self.whisper_model} (enabled: {self.use_openai_whisper})")
+                logger.info(f"  - Whisper mode: Auto-detect language → Transcribe → Auto-translate to English")
                 logger.info(f"  - TTS model: {self.tts_model}")
                 if not disable_ssl:
                     logger.info(f"  - SSL certs: {certifi.where()}")
@@ -164,24 +165,117 @@ Please modify the selected text according to the voice instruction. Return only 
         """Check if OpenAI client is available and configured"""
         return self.client is not None
 
-    def transcribe_audio(self, audio_file_path):
+    def is_english(self, text):
+        """
+        Quick check if text is primarily English.
+        Returns True if English, False otherwise.
+        """
+        if not text:
+            return True
+
+        # Check for non-Latin scripts (Hindi, Chinese, Arabic, etc.)
+        non_latin_chars = 0
+        for char in text:
+            # Check if character is from non-Latin Unicode blocks
+            code = ord(char)
+            # Devanagari (Hindi): 0x0900-0x097F
+            # Arabic: 0x0600-0x06FF
+            # Chinese: 0x4E00-0x9FFF
+            # And many others...
+            if (0x0900 <= code <= 0x097F or  # Devanagari
+                0x0600 <= code <= 0x06FF or  # Arabic
+                0x4E00 <= code <= 0x9FFF or  # Chinese
+                0x3040 <= code <= 0x30FF or  # Japanese
+                0xAC00 <= code <= 0xD7AF):   # Korean
+                non_latin_chars += 1
+
+        # If more than 10% non-Latin, consider it non-English
+        if len(text) > 0 and non_latin_chars / len(text) > 0.1:
+            return False
+
+        return True
+
+    def translate_to_english(self, text):
+        """
+        Translate non-English text to English using GPT.
+        """
+        if not self.client:
+            raise Exception("OpenAI client not initialized")
+
+        try:
+            kwargs = {
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a translator. Translate the given text to English. Return ONLY the English translation, no explanations."
+                    },
+                    {
+                        "role": "user",
+                        "content": text
+                    }
+                ]
+            }
+
+            # GPT-5 specific settings
+            if self.model.startswith('gpt-5'):
+                kwargs['max_completion_tokens'] = 500
+                if 'nano' not in self.model.lower():
+                    kwargs['temperature'] = 0.3
+            else:
+                kwargs['max_tokens'] = 500
+                kwargs['temperature'] = 0.3
+
+            response = self.client.chat.completions.create(**kwargs)
+
+            if response.choices and len(response.choices) > 0:
+                translated = response.choices[0].message.content.strip()
+                logger.info(f"Translated to English: {translated}")
+                return translated
+            else:
+                raise Exception("No content in translation response")
+
+        except Exception as e:
+            logger.error(f"Error translating to English: {e}")
+            # Return original text as fallback
+            return text
+
+    def transcribe_audio(self, audio_file_path, language=None):
         """
         Transcribe audio file using OpenAI Whisper API.
-        Returns transcribed text.
+        Auto-detects language and translates to English if needed.
+
+        Args:
+            audio_file_path: Path to audio file
+            language: Optional language code (e.g., 'en', 'es', 'hi')
+
+        Returns transcribed text in English.
         """
         if not self.client:
             raise Exception("OpenAI client not initialized")
 
         try:
             with open(audio_file_path, 'rb') as audio_file:
-                response = self.client.audio.transcriptions.create(
-                    model=self.whisper_model,
-                    file=audio_file,
-                    response_format="text"
-                )
+                # Use transcriptions endpoint
+                kwargs = {
+                    "model": self.whisper_model,
+                    "file": audio_file,
+                    "response_format": "text"
+                }
+                if language:
+                    kwargs["language"] = language
 
-            logger.debug(f"OpenAI Whisper transcription: {response}")
-            return response.strip() if isinstance(response, str) else response.text.strip()
+                response = self.client.audio.transcriptions.create(**kwargs)
+
+            transcribed = response.strip() if isinstance(response, str) else response.text.strip()
+            logger.debug(f"OpenAI Whisper transcription: {transcribed}")
+
+            # Check if text is English
+            if not self.is_english(transcribed):
+                logger.info(f"Non-English detected, translating to English...")
+                transcribed = self.translate_to_english(transcribed)
+
+            return transcribed
 
         except Exception as e:
             logger.error(f"Error transcribing audio with OpenAI: {e}")
@@ -306,8 +400,9 @@ Return ONLY valid JSON, no markdown formatting or code blocks."""
             logger.error(f"Response was: {json_str}")
             return None
         except Exception as e:
-            logger.error(f"Error parsing task command: {e}")
-            raise
+            logger.error(f"Error parsing task command with GPT: {e}")
+            logger.warning("GPT parsing failed, will use fallback parser")
+            return None
 
     def get_model_info(self):
         """Get information about the current model configuration"""

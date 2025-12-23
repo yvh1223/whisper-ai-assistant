@@ -66,7 +66,7 @@ class TaskManager:
 
     def parse_command(self, text):
         """
-        Use GPT to parse natural language task command.
+        Parse natural language task command using GPT or fallback parser.
         Returns structured dict with action, description, priority, due_date, category, identifier, filter.
 
         Args:
@@ -75,17 +75,120 @@ class TaskManager:
         Returns:
             dict: Parsed command structure or None if parsing fails
         """
-        if not self.openai_client or not self.openai_client.is_available():
-            logger.warning("OpenAI client not available for task parsing")
-            return None
+        # Try GPT parsing first if available
+        if self.openai_client and self.openai_client.is_available():
+            try:
+                current_date = datetime.now().strftime('%Y-%m-%d')
+                parsed = self.openai_client.parse_task_command(text, current_date)
+                if parsed:
+                    return parsed
+                # If GPT returns None, fall through to simple parser
+                logger.info("GPT parsing returned None, trying fallback parser")
+            except Exception as e:
+                logger.error(f"Error with GPT parsing: {e}, trying fallback parser")
 
-        try:
-            current_date = datetime.now().strftime('%Y-%m-%d')
-            parsed = self.openai_client.parse_task_command(text, current_date)
-            return parsed
-        except Exception as e:
-            logger.error(f"Error parsing task command: {e}")
-            return None
+        # Fallback: simple parser for basic cases
+        return self._simple_parse(text)
+
+    def _simple_parse(self, text):
+        """
+        Simple fallback parser for basic task commands without GPT.
+        Handles: "task add DESCRIPTION [high/medium/low] [tomorrow/today]"
+
+        Args:
+            text: Raw command text
+
+        Returns:
+            dict: Parsed command or None
+        """
+        text = text.strip().lower()
+
+        # Remove "task" or "todo" prefix
+        for prefix in ['task', 'todo', 'to do']:
+            if text.startswith(prefix):
+                text = text[len(prefix):].strip()
+                break
+
+        # Determine action
+        action = None
+        if text.startswith('add'):
+            action = 'add'
+            text = text[3:].strip()
+        elif text.startswith('complete'):
+            action = 'complete'
+            text = text[8:].strip()
+        elif text.startswith('list'):
+            action = 'list'
+            return {'action': 'list', 'filter': 'pending'}
+        elif text.startswith('archive'):
+            action = 'archive'
+            text = text[7:].strip()
+        else:
+            # Default to "add" if no action specified
+            action = 'add'
+
+        if action == 'add':
+            # Parse description, priority, and due date
+            priority = None
+            due_date = None
+            description = text
+
+            # Extract priority
+            for p in ['high priority', 'medium priority', 'low priority', 'high', 'medium', 'low']:
+                if p in text:
+                    priority = p.replace(' priority', '')
+                    text = text.replace(p, '').strip()
+                    break
+
+            # Extract due date
+            today = datetime.now()
+            if 'tomorrow' in text:
+                due_date = (today + timedelta(days=1)).strftime('%Y-%m-%d')
+                text = text.replace('tomorrow', '').strip()
+            elif 'today' in text:
+                due_date = today.strftime('%Y-%m-%d')
+                text = text.replace('today', '').strip()
+
+            # Clean up description
+            description = ' '.join(text.split()).strip()
+
+            if not description:
+                logger.warning("No description found in task command")
+                return None
+
+            return {
+                'action': 'add',
+                'description': description,
+                'priority': priority,
+                'due_date': due_date,
+                'category': None,
+                'identifier': None,
+                'filter': None
+            }
+
+        elif action == 'complete':
+            return {
+                'action': 'complete',
+                'identifier': text,
+                'description': None,
+                'priority': None,
+                'due_date': None,
+                'category': None,
+                'filter': None
+            }
+
+        elif action == 'archive':
+            return {
+                'action': 'archive',
+                'identifier': text,
+                'description': None,
+                'priority': None,
+                'due_date': None,
+                'category': None,
+                'filter': None
+            }
+
+        return None
 
     def add_task(self, description, priority=None, due_date=None, category=None):
         """

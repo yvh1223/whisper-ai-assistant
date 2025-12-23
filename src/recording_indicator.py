@@ -52,11 +52,13 @@ class RecordingIndicator:
             audio_array = np.frombuffer(audio_data, dtype=np.int16)
 
             # Calculate RMS (Root Mean Square) level
-            rms = np.sqrt(np.mean(audio_array**2))
+            mean_square = np.mean(audio_array**2)
+            # Handle empty or zero arrays to avoid sqrt warning
+            rms = np.sqrt(mean_square) if mean_square > 0 else 0.0
 
             # Normalize to 0-1 range
             max_rms = 3000
-            normalized_level = min(rms / max_rms, 1.0)
+            normalized_level = min(rms / max_rms, 1.0) if rms > 0 else 0.0
 
             # Keep a rolling window of levels
             self.audio_levels.append(normalized_level)
