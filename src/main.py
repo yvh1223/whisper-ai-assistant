@@ -586,8 +586,8 @@ class WhisperDictationApp(rumps.App):
         # Type text at cursor position without altering the clipboard
         logger.info(f"Inserting text at cursor: {text[:50]}...")
         try:
-            # Small delay to ensure focus is ready
-            time.sleep(0.1)
+            # Minimal delay to ensure focus is ready
+            time.sleep(0.01)
             self.keyboard_controller.type(text)
             logger.info("✓ Text inserted successfully")
         except Exception as e:
