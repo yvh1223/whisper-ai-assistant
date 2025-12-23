@@ -48,10 +48,16 @@ class WhisperDictationApp(rumps.App):
 
         # Recording state
         self.recording = False
+        self.recording_start_time = None  # Track when recording started
         self.audio = pyaudio.PyAudio()
         self.frames = []
         self.keyboard_controller = Controller()
         self.cached_selected_text = None  # Cache selected text when recording stops
+
+        # App lifecycle tracking
+        self.app_start_time = time.time()
+        self.max_app_runtime = 4 * 60 * 60  # 4 hours in seconds
+        self.max_recording_duration = 15 * 60  # 15 minutes in seconds
 
         # Microphone selection (None = use default)
         self.selected_input_device = None
@@ -135,14 +141,44 @@ class WhisperDictationApp(rumps.App):
         self.watchdog.start()
     
     def check_exit_flag(self):
-        """Monitor the exit flag and terminate the app when set"""
+        """Monitor the exit flag, app runtime, and recording duration"""
         while True:
+            # Check for exit flag
             if exit_flag:
                 logger.info("Watchdog detected exit flag, shutting down...")
                 self.cleanup()
                 rumps.quit_application()
                 os._exit(0)
                 break
+
+            # Check if app has been running too long (4 hours)
+            app_runtime = time.time() - self.app_start_time
+            if app_runtime > self.max_app_runtime:
+                logger.warning(f"⚠️  App has been running for {app_runtime/3600:.1f} hours - auto-shutting down for safety")
+                rumps.notification(
+                    title="Whisper Dictation Auto-Shutdown",
+                    subtitle="App has been running for 4+ hours",
+                    message="Automatically shutting down for safety. Restart when needed."
+                )
+                time.sleep(2)  # Give notification time to show
+                self.cleanup()
+                rumps.quit_application()
+                os._exit(0)
+                break
+
+            # Check if recording has been running too long (15 minutes)
+            if self.recording and self.recording_start_time:
+                recording_duration = time.time() - self.recording_start_time
+                if recording_duration > self.max_recording_duration:
+                    logger.warning(f"⚠️  Recording has been running for {recording_duration/60:.1f} minutes - auto-stopping")
+                    rumps.notification(
+                        title="Recording Auto-Stopped",
+                        subtitle="Recording exceeded 15 minutes",
+                        message="Recording automatically stopped for safety. Please start a new recording if needed."
+                    )
+                    # Stop recording
+                    self.stop_recording()
+
             time.sleep(0.5)
     
     def cleanup(self):
@@ -229,6 +265,7 @@ class WhisperDictationApp(rumps.App):
     def discard_recording(self):
         """Discard current recording without processing (held too short)"""
         self.recording = False
+        self.recording_start_time = None  # Clear recording start time
         if hasattr(self, 'recording_thread') and self.recording_thread.is_alive():
             self.recording_thread.join(timeout=0.5)
         self.frames = []
@@ -386,6 +423,7 @@ class WhisperDictationApp(rumps.App):
 
         self.frames = []
         self.recording = True
+        self.recording_start_time = time.time()  # Track when recording started
         self.cached_selected_text = None  # Clear any previous cached selection
 
         # Update UI
@@ -402,6 +440,7 @@ class WhisperDictationApp(rumps.App):
     
     def stop_recording(self):
         self.recording = False
+        self.recording_start_time = None  # Clear recording start time
         if hasattr(self, 'recording_thread'):
             self.recording_thread.join(timeout=2.0)  # Add timeout to prevent indefinite blocking
 
