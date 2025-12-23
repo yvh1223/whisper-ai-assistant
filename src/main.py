@@ -835,12 +835,11 @@ class WhisperDictationApp(rumps.App):
     def prompt_task_typing(self, sender):
         """Open text input window for typing task"""
         window = rumps.Window(
-            message="Type your task using natural language:\n\nExamples:\n• buy milk tomorrow\n• call dentist high priority\n• finish report by friday\n• meeting at 3pm today",
+            message="Type your task (e.g., 'buy milk tomorrow' or 'call dentist high priority')",
             title="Add Task",
             default_text="",
             ok="Add Task",
-            cancel="Cancel",
-            dimensions=(400, 24)
+            cancel="Cancel"
         )
         response = window.run()
 
