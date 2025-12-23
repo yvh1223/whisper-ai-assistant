@@ -3,6 +3,7 @@ import os
 import time
 import tempfile
 import threading
+import subprocess
 import pyaudio
 import wave
 import numpy as np
@@ -330,7 +331,6 @@ class WhisperDictationApp(rumps.App):
 
             # Use OpenAI TTS
             if self.openai_client.is_available():
-                import tempfile
                 with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_audio:
                     audio_file = temp_audio.name
 
@@ -339,11 +339,9 @@ class WhisperDictationApp(rumps.App):
 
                 # Play the audio file
                 logger.info(f"Playing audio: {audio_file}")
-                import subprocess
                 subprocess.run(['afplay', audio_file], check=True)
 
                 # Clean up
-                import os
                 os.unlink(audio_file)
 
                 self.title = "🎙️"
@@ -520,7 +518,6 @@ class WhisperDictationApp(rumps.App):
                             self.title = "🔊 (Reading...)"
                             self.status_item.title = "Status: Reading text aloud..."
 
-                            import tempfile
                             with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_audio:
                                 audio_file = temp_audio.name
 
@@ -529,11 +526,9 @@ class WhisperDictationApp(rumps.App):
 
                             # Play the audio file
                             logger.info(f"Playing audio: {audio_file}")
-                            import subprocess
                             subprocess.run(['afplay', audio_file], check=True)
 
                             # Clean up
-                            import os
                             os.unlink(audio_file)
 
                             self.title = "🎙️"
