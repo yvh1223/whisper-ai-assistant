@@ -213,6 +213,102 @@ Please modify the selected text according to the voice instruction. Return only 
             logger.error(f"Error generating speech with OpenAI: {e}")
             raise
 
+    def parse_task_command(self, text, current_date):
+        """
+        Parse natural language task command using GPT.
+        Returns structured JSON: {action, description, priority, due_date, category, identifier, filter}
+
+        Args:
+            text: Raw voice command (e.g., "task add buy milk high priority tomorrow")
+            current_date: Current date in YYYY-MM-DD format for date parsing
+
+        Returns:
+            dict: Parsed command structure or None if parsing fails
+        """
+        if not self.client:
+            raise Exception("OpenAI client not initialized")
+
+        system_prompt = """You are a task command parser. Extract task information from voice commands and return ONLY valid JSON.
+
+Commands:
+- ADD: "task add [description] [priority: high/medium/low] [due: tomorrow/today/monday/date] [category: name]"
+- COMPLETE: "task complete [description/number]"
+- LIST: "task list [filter: all/pending/today/high/category]"
+- ARCHIVE: "task archive [description/number]"
+
+Return JSON with these fields:
+{
+  "action": "add|complete|list|archive",
+  "description": "task description",
+  "priority": "high|medium|low|null",
+  "due_date": "YYYY-MM-DD|null",
+  "category": "category name|null",
+  "identifier": "task description or number|null",
+  "filter": "filter type|null"
+}
+
+Date parsing rules:
+- "tomorrow" = current_date + 1 day
+- "today" = current_date
+- "monday", "tuesday", etc. = next occurrence of that weekday
+- "next week" = current_date + 7 days
+- Specific dates like "december 25" should be converted to YYYY-MM-DD format
+
+Examples:
+Input: "task add buy milk high priority tomorrow food"
+Output: {"action": "add", "description": "buy milk", "priority": "high", "due_date": "[tomorrow's date]", "category": "food", "identifier": null, "filter": null}
+
+Input: "task complete buy milk"
+Output: {"action": "complete", "description": null, "priority": null, "due_date": null, "category": null, "identifier": "buy milk", "filter": null}
+
+Input: "task list high priority tasks"
+Output: {"action": "list", "description": null, "priority": null, "due_date": null, "category": null, "identifier": null, "filter": "high"}
+
+Return ONLY valid JSON, no markdown formatting or code blocks."""
+
+        user_prompt = f"Parse this voice command: \"{text}\"\n\nCurrent date: {current_date}"
+
+        try:
+            kwargs = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+            }
+
+            # Use appropriate token limits and temperature
+            if self.model.startswith('gpt-5'):
+                kwargs['max_completion_tokens'] = 200
+                # GPT-5 Nano only supports temperature=1
+                if 'nano' not in self.model.lower():
+                    kwargs['temperature'] = 0.3
+            else:
+                kwargs['max_tokens'] = 200
+                kwargs['temperature'] = 0.3  # Lower temp for structured output
+
+            response = self.client.chat.completions.create(**kwargs)
+
+            if response.choices and len(response.choices) > 0:
+                json_str = response.choices[0].message.content.strip()
+                # Remove markdown code blocks if present
+                json_str = json_str.replace('```json', '').replace('```', '').strip()
+
+                import json
+                parsed = json.loads(json_str)
+                logger.debug(f"Parsed task command: {parsed}")
+                return parsed
+            else:
+                raise Exception("No content in OpenAI response")
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse GPT response as JSON: {e}")
+            logger.error(f"Response was: {json_str}")
+            return None
+        except Exception as e:
+            logger.error(f"Error parsing task command: {e}")
+            raise
+
     def get_model_info(self):
         """Get information about the current model configuration"""
         return {

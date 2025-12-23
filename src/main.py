@@ -14,6 +14,7 @@ import faster_whisper
 import signal
 from text_selection import TextSelection
 from openai_client import OpenAIClient
+from task_manager import TaskManager
 from recording_indicator import RecordingIndicator
 from logger_config import setup_logging
 
@@ -62,10 +63,15 @@ class WhisperDictationApp(rumps.App):
         # Add TTS menu item
         self.tts_menu_item = rumps.MenuItem("Read Selected Text Aloud")
 
+        # Create task submenu
+        self.task_submenu = rumps.MenuItem("Tasks")
+        self.setup_task_menu()
+
         self.menu = [
             self.recording_menu_item,
             self.tts_menu_item,
             self.mic_submenu,
+            self.task_submenu,
             None,
             self.status_item
         ]
@@ -75,6 +81,9 @@ class WhisperDictationApp(rumps.App):
 
         # Initialize OpenAI client
         self.openai_client = OpenAIClient()
+
+        # Initialize TaskManager
+        self.task_manager = TaskManager(openai_client=self.openai_client)
 
         # Initialize recording indicator
         self.indicator = RecordingIndicator()
@@ -499,6 +508,19 @@ class WhisperDictationApp(rumps.App):
                     raise Exception(f"Whisper model error: {model_error}")
             
             if text:
+                text_lower = text.strip().lower()
+
+                # Check for task commands FIRST (before selected text)
+                task_keywords = ['task', 'todo', 'to do']
+                is_task_command = any(text_lower.startswith(keyword) for keyword in task_keywords)
+
+                if is_task_command:
+                    logger.info(f"Task command detected: {text}")
+                    self.title = "🎙️ (Processing task...)"
+                    self.status_item.title = "Status: Processing task command..."
+                    self.process_task_command(text)
+                    return  # Don't proceed to normal dictation
+
                 # Use cached selected text (captured when recording stopped)
                 selected_text = getattr(self, 'cached_selected_text', None)
 
@@ -597,7 +619,208 @@ class WhisperDictationApp(rumps.App):
             import pyperclip
             pyperclip.copy(text)
             logger.info("✓ Text copied to clipboard - paste with Cmd+V")
-    
+
+    def setup_task_menu(self):
+        """Setup/refresh task submenu with current tasks"""
+        # Clear existing items
+        self.task_submenu.clear()
+
+        # Static items
+        add_item = rumps.MenuItem("Add Task (voice)", callback=self.prompt_task_recording)
+        list_item = rumps.MenuItem("List All Tasks", callback=self.list_tasks_via_voice)
+
+        self.task_submenu.add(add_item)
+        self.task_submenu.add(list_item)
+        self.task_submenu.add(rumps.separator)
+
+        # Dynamic task items (top 5 pending + 2 recent completed)
+        pending_tasks = self.task_manager.get_tasks(limit=5, status='pending')
+        completed_tasks = self.task_manager.get_tasks(limit=2, status='completed')
+
+        tasks = pending_tasks + completed_tasks
+
+        for task in tasks:
+            icon = "[ ]" if task['status'] == 'pending' else "[✓]"
+            priority_label = f"({task['priority'].title()})" if task['priority'] else ""
+            due_label = f"- {self.format_friendly_date(task['due_date'])}" if task['due_date'] else ""
+
+            title = f"{icon} {task['description'][:30]} {priority_label} {due_label}"
+            menu_item = rumps.MenuItem(title, callback=lambda s, t=task: self.toggle_task_from_menu(t))
+            self.task_submenu.add(menu_item)
+
+        if tasks:
+            self.task_submenu.add(rumps.separator)
+
+        # View all tasks (opens JSON file)
+        view_item = rumps.MenuItem("View All Tasks", callback=self.open_task_file)
+        self.task_submenu.add(view_item)
+
+        # Update menu title with count
+        pending_count = self.task_manager.get_pending_count()
+        self.task_submenu.title = f"Tasks ({pending_count} pending)"
+
+    def process_task_command(self, text):
+        """Process voice task command"""
+        try:
+            # Parse command
+            parsed = self.task_manager.parse_command(text)
+
+            if not parsed or 'action' not in parsed:
+                self.speak_feedback("Sorry, I didn't understand that task command")
+                return
+
+            # Execute action
+            if parsed['action'] == 'add':
+                task = self.task_manager.add_task(
+                    description=parsed.get('description'),
+                    priority=parsed.get('priority'),
+                    due_date=parsed.get('due_date'),
+                    category=parsed.get('category')
+                )
+                feedback = self.format_task_added_feedback(task)
+                self.speak_feedback(feedback)
+
+            elif parsed['action'] == 'complete':
+                task = self.task_manager.complete_task(parsed.get('identifier'))
+                if task:
+                    self.speak_feedback(f"Completed task: {task['description']}")
+                else:
+                    self.speak_feedback("Could not find that task")
+
+            elif parsed['action'] == 'list':
+                tasks = self.task_manager.list_tasks(filter_type=parsed.get('filter') or 'pending')
+                feedback = self.format_task_list_feedback(tasks)
+                self.speak_feedback(feedback)
+
+            elif parsed['action'] == 'archive':
+                task = self.task_manager.archive_task(parsed.get('identifier'))
+                if task:
+                    self.speak_feedback(f"Archived task: {task['description']}")
+                else:
+                    self.speak_feedback("Could not find that task")
+
+            # Refresh menu
+            self.setup_task_menu()
+            self.status_item.title = "Status: ✓ Task updated"
+
+        except Exception as e:
+            logger.error(f"Error processing task command: {e}")
+            self.speak_feedback("Sorry, there was an error processing that task")
+            self.status_item.title = f"Status: Task error"
+
+    def speak_feedback(self, message):
+        """Speak feedback using TTS"""
+        if not self.openai_client.is_available():
+            logger.warning("TTS not available - skipping voice feedback")
+            return
+
+        try:
+            self.title = "🔊"
+            logger.info(f"Speaking: {message}")
+
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_audio:
+                audio_file = temp_audio.name
+
+            self.openai_client.text_to_speech(message, audio_file)
+            subprocess.run(['afplay', audio_file], check=True)
+            os.unlink(audio_file)
+
+            self.title = "🎙️"
+        except Exception as e:
+            logger.error(f"TTS feedback error: {e}")
+            self.title = "🎙️"
+
+    def format_task_added_feedback(self, task):
+        """Format friendly feedback for added task"""
+        feedback = f"Added task: {task['description']}"
+        if task.get('priority'):
+            feedback += f", {task['priority']} priority"
+        if task.get('due_date'):
+            feedback += f", due {self.format_friendly_date(task['due_date'])}"
+        if task.get('category'):
+            feedback += f", in {task['category']}"
+        return feedback
+
+    def format_task_list_feedback(self, tasks):
+        """Format friendly feedback for task list"""
+        if not tasks:
+            return "You have no pending tasks"
+
+        count = len(tasks)
+        feedback = f"You have {count} pending task{'s' if count > 1 else ''}. "
+
+        for i, task in enumerate(tasks[:5], 1):  # Limit to 5 for voice
+            feedback += f"{i}. {task['description']}"
+            if task.get('priority'):
+                feedback += f", {task['priority']} priority"
+            if task.get('due_date'):
+                feedback += f", due {self.format_friendly_date(task['due_date'])}"
+            feedback += ". "
+
+        if count > 5:
+            feedback += f"And {count - 5} more."
+
+        return feedback
+
+    def format_friendly_date(self, date_str):
+        """Convert ISO date to friendly format (e.g., 'tomorrow', 'today')"""
+        if not date_str:
+            return ""
+
+        try:
+            from datetime import datetime, timedelta
+            task_date = datetime.fromisoformat(date_str).date()
+            today = datetime.now().date()
+            tomorrow = today + timedelta(days=1)
+
+            if task_date == today:
+                return "today"
+            elif task_date == tomorrow:
+                return "tomorrow"
+            elif task_date < today:
+                days_ago = (today - task_date).days
+                return f"{days_ago} day{'s' if days_ago > 1 else ''} ago"
+            else:
+                days_until = (task_date - today).days
+                if days_until <= 7:
+                    return f"in {days_until} day{'s' if days_until > 1 else ''}"
+                else:
+                    return task_date.strftime('%b %d')
+        except Exception as e:
+            logger.error(f"Error formatting date: {e}")
+            return date_str
+
+    def toggle_task_from_menu(self, task):
+        """Toggle task completion from menu click"""
+        try:
+            if task['status'] == 'pending':
+                self.task_manager.complete_task(task['id'])
+            else:
+                self.task_manager.uncomplete_task(task['id'])
+            self.setup_task_menu()
+        except Exception as e:
+            logger.error(f"Error toggling task: {e}")
+
+    def prompt_task_recording(self, sender):
+        """Start recording specifically for task command"""
+        self.start_recording()
+
+    def list_tasks_via_voice(self, sender):
+        """List all tasks via TTS"""
+        try:
+            tasks = self.task_manager.list_tasks(filter_type='pending')
+            feedback = self.format_task_list_feedback(tasks)
+            self.speak_feedback(feedback)
+        except Exception as e:
+            logger.error(f"Error listing tasks: {e}")
+
+    def open_task_file(self, sender):
+        """Open task JSON file in default editor"""
+        try:
+            subprocess.run(['open', str(self.task_manager.task_file)])
+        except Exception as e:
+            logger.error(f"Error opening task file: {e}")
+
     def handle_shutdown(self, _signal, _frame):
         """This method is no longer used with the global handler approach"""
         pass

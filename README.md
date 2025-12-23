@@ -14,6 +14,12 @@ A macOS application that converts speech to text using OpenAI's Whisper model ru
 - **Text-to-Speech (TTS)** - Select text and have it read aloud with natural voice
   - Use menu bar "Read Selected Text Aloud" option
   - Or say "read this", "read aloud", or "speak" when text is selected
+- **Voice-Controlled Task Tracker** - Manage your tasks using natural voice commands
+  - Add tasks with priorities, due dates, and categories: "task add buy groceries high priority tomorrow"
+  - Complete tasks: "task complete buy groceries"
+  - List tasks: "task list high priority"
+  - Archive tasks: "task archive old task"
+  - View tasks in menu bar with visual indicators
 - Visual feedback with menu bar icon status (🎙️ for dictation, 🔊 for reading)
 
 ## Setup and Installation
@@ -117,11 +123,74 @@ Have selected text read aloud with natural voice:
 
 **Note**: TTS requires OpenAI API to be configured in `.env`
 
+### Voice-Controlled Task Tracker
+
+Manage your tasks using natural voice commands. All tasks are stored locally in `~/.whisper_tasks.json`.
+
+**Voice Commands:**
+
+All task commands start with "task" or "todo":
+
+**1. Add a task:**
+- Basic: "task add buy milk"
+- With priority: "task add buy groceries high priority"
+- With due date: "task add call dentist tomorrow"
+- With category: "task add finish report in work"
+- Full example: "task add buy groceries high priority tomorrow food"
+
+**2. Complete a task:**
+- "task complete buy milk"
+- "task complete groceries"
+
+**3. List tasks:**
+- All pending: "task list"
+- By priority: "task list high priority"
+- By category: "task list work"
+- Today's tasks: "task list today"
+
+**4. Archive a task:**
+- "task archive old task"
+- "task archive buy milk"
+
+**Menu Bar Integration:**
+
+The Tasks menu shows:
+- Pending task count in the title: "Tasks (3 pending)"
+- Top 5 pending tasks with priorities and due dates
+- 2 most recent completed tasks
+- Interactive options:
+  - Click any task to toggle complete/incomplete
+  - "Add Task (voice)" - triggers recording mode
+  - "List All Tasks" - reads all tasks via TTS
+  - "View All Tasks" - opens the JSON file
+
+**Task Features:**
+- **Priorities**: High, Medium, Low
+- **Due Dates**: Natural language (tomorrow, today, next monday, december 25)
+- **Categories**: Organize tasks by category/tag
+- **Voice Feedback**: Confirms each operation via TTS
+- **Fuzzy Matching**: "complete buy milk" matches "Buy groceries and milk"
+- **Persistent Storage**: All tasks saved to `~/.whisper_tasks.json`
+
+**Example Workflow:**
+```
+You: [Press Globe/Fn] "task add buy groceries high priority tomorrow" [Release]
+App: "Added task: buy groceries, high priority, due tomorrow"
+[Menu bar updates to show "Tasks (1 pending)"]
+
+You: [Press Globe/Fn] "task complete buy groceries" [Release]
+App: "Completed task: buy groceries"
+[Menu bar updates to show "Tasks (0 pending)"]
+```
+
+**Note**: Task parsing requires OpenAI API to be configured in `.env` for natural language understanding.
+
 You can also interact with the app through the menu bar icon:
 
 - Click "Start Recording" / "Stop Recording" to toggle recording
 - Click "Read Selected Text Aloud" for TTS
 - Select microphone from the "Microphone" submenu
+- Access "Tasks" menu to manage your task list
 - View status in the menu
 - Click "Quit" to exit the application
 
