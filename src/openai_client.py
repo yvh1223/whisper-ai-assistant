@@ -391,9 +391,20 @@ Return ONLY valid JSON, no markdown formatting or code blocks."""
             response = self.client.chat.completions.create(**kwargs)
 
             if response.choices and len(response.choices) > 0:
-                json_str = response.choices[0].message.content.strip()
+                content = response.choices[0].message.content
+                logger.debug(f"Raw GPT response content: {repr(content)}")
+
+                if not content:
+                    logger.error("GPT returned empty content")
+                    return None
+
+                json_str = content.strip()
                 # Remove markdown code blocks if present
                 json_str = json_str.replace('```json', '').replace('```', '').strip()
+
+                if not json_str:
+                    logger.error("GPT response is empty after cleanup")
+                    return None
 
                 parsed = json.loads(json_str)
                 logger.debug(f"Parsed task command: {parsed}")
