@@ -849,6 +849,13 @@ class WhisperDictationApp(rumps.App):
             self.start_recording()
             sender.title = "Stop Recording"
             self.recording_menu_item.title = "Stop Recording"
+
+            # Show notification with instructions
+            rumps.notification(
+                title="Recording Started",
+                subtitle="Speak your task now",
+                message="Click the menu bar icon → 'Stop Recording' when done, or press Globe/Fn key"
+            )
         else:
             # Stop recording
             self.stop_recording()
