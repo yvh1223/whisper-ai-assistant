@@ -1,245 +1,103 @@
 # Whisper Dictation
 
-**Note: This application is for macOS only.**
-
-A macOS application that converts speech to text using OpenAI's Whisper model running locally. Press the Globe/Function key to start recording, press it again to stop recording, transcribe, and paste text at your current cursor position.
+**macOS-only** menu bar app for voice-to-text dictation using OpenAI's Whisper model.
 
 ## Features
 
-- System tray (menu bar) application that runs in the background
-- Global hotkey (Globe/Function key) to trigger dictation
-- Transcribes speech to text using OpenAI's Whisper model locally
-- Automatically pastes transcribed text at your cursor position
-- **AI-powered text enhancement** - when you have text selected, your voice becomes an instruction to modify that text using OpenAI GPT models
-- **Text-to-Speech (TTS)** - Select text and have it read aloud with natural voice
-  - Use menu bar "Read Selected Text Aloud" option
-  - Or say "read this", "read aloud", or "speak" when text is selected
-- **Voice-Controlled Task Tracker** - Manage your tasks using natural voice commands
-  - Add tasks with priorities, due dates, and categories: "task add buy groceries high priority tomorrow"
-  - Complete tasks: "task complete buy groceries"
-  - List tasks: "task list high priority"
-  - Archive tasks: "task archive old task"
-  - View tasks in menu bar with visual indicators
-- Visual feedback with menu bar icon status (🎙️ for dictation, 🔊 for reading)
+- **Voice Dictation** - Press Globe/Fn key to record, transcribe, and paste text
+- **AI Text Enhancement** - Select text + voice command to modify it with AI
+- **Text-to-Speech** - Read selected text aloud with natural voice
+- **Task Manager** - Voice-controlled task tracking with priorities and due dates
 
-## Setup and Installation
+## How It Works
 
-### Development Setup
+```mermaid
+flowchart TD
+    Start([Press Globe/Fn Key]) --> Recording[🎙️ Recording Audio]
+    Recording --> Stop([Press Globe/Fn Again])
+    Stop --> Check{Text Selected?}
 
-1. Install Python dependencies:
+    Check -->|No| Whisper[Whisper Transcription]
+    Whisper --> Paste[📝 Paste at Cursor]
 
+    Check -->|Yes| CheckCmd{Voice Command?}
+    CheckCmd -->|"read this"<br/>"speak"| TTS[🔊 Text-to-Speech]
+    TTS --> Play[▶️ Play Audio]
+
+    CheckCmd -->|"task add..."| Task[📋 Task Manager]
+    Task --> Store[(Save to JSON)]
+    Store --> Feedback[🔔 Voice Feedback]
+
+    CheckCmd -->|Other<br/>Instructions| AI[🤖 AI Enhancement]
+    AI --> Replace[✏️ Replace Selected Text]
+
+    Play --> Done([Done])
+    Paste --> Done
+    Replace --> Done
+    Feedback --> Done
+
+    style Start fill:#90EE90
+    style Done fill:#90EE90
+    style Recording fill:#FFB6C1
+    style AI fill:#87CEEB
+    style TTS fill:#DDA0DD
+    style Task fill:#F0E68C
 ```
+
+## Quick Setup
+
+```bash
+# 1. Install dependencies (requires Python 3.12)
+python3.12 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
-```
+brew install portaudio mpg123
 
-2. Install PortAudio (required for PyAudio):
-
-```
-brew install portaudio
-```
-
-3. Set up OpenAI API (optional - for AI text enhancement and/or cloud-based transcription):
-
-```
+# 2. Configure OpenAI API (optional - for AI features)
 cp .env.example .env
-# Edit .env and add your OpenAI API key
-# Get your API key from: https://platform.openai.com/api-keys
-```
+# Edit .env with your OpenAI API key from https://platform.openai.com/api-keys
 
-4. Run the application in development mode:
-
-```
-python src/main.py
-```
-
-### Running the App (System-Wide)
-
-**Recommended - using the start script:**
-
-```bash
-./start_background.sh
-```
-
-This will:
-- Activate the virtual environment
-- Start the app with menu bar icon 🎙️
-- Show clear instructions
-
-**⚠️ IMPORTANT:** The terminal window must stay open (you can minimize it). Closing the terminal will stop the app.
-
-**To stop:**
-```bash
-# In the terminal where it's running: Press Ctrl+C
-# Or from another terminal:
-./stop_background.sh
-```
-
-**Alternative - direct run:**
-```bash
+# 3. Run the app
 ./run.sh
 ```
 
 ## Usage
 
-1. Launch the Whisper Dictation app. You'll see a microphone icon (🎙️) in your menu bar.
-2. Press the Globe key or Function key on your keyboard to start recording.
-3. Speak clearly into your microphone.
-4. Press the Globe/Function key again to stop recording.
-5. The app will transcribe your speech and automatically paste it at your current cursor position.
+**Dictation:**
+- Press **Globe/Fn** to start recording
+- Speak clearly
+- Press **Globe/Fn** again to stop → text appears at cursor
 
-### AI Text Enhancement (New Feature)
+**AI Enhancement:**
+- Select text
+- Press **Globe/Fn** and say: "make this professional" or "translate to Spanish"
+- Press **Globe/Fn** again → text is replaced
 
-When you have OpenAI API configured, you can use voice commands to modify selected text:
+**Text-to-Speech:**
+- Select text
+- Click menu bar → "Read Selected Text Aloud"
+- Or say "read this" while text is selected
 
-1. **Select text** in any application (highlight the text you want to modify)
-2. **Press the Globe/Function key** to start recording
-3. **Give a voice instruction** like:
-   - "Make this more professional"
-   - "Translate this to Spanish"
-   - "Summarize this paragraph"
-   - "Fix the grammar"
-   - "Make this sound friendlier"
-4. **Press the Globe/Function key again** to stop recording
-5. The selected text will be **automatically replaced** with the AI-enhanced version
+**Tasks:**
+- Say "task add buy milk tomorrow high priority"
+- Say "task complete buy milk"
+- View tasks in menu bar
 
-**Note**: If no text is selected, the app behaves normally and just inserts the transcribed text.
+## Permissions Required
 
-### Text-to-Speech (TTS)
-
-Have selected text read aloud with natural voice:
-
-**Method 1: Voice Command**
-1. **Select text** in any application
-2. **Press Globe/Function key** to start recording
-3. **Say**: "read this" or "read aloud" or "speak"
-4. **Press Globe/Function key** to stop
-5. The text will be **read aloud** automatically
-
-**Method 2: Menu Bar**
-1. **Select text** in any application
-2. Click the 🎙️ icon in your menu bar
-3. Click **"Read Selected Text Aloud"**
-4. The text will be read aloud
-
-**Note**: TTS requires OpenAI API to be configured in `.env`
-
-### Voice-Controlled Task Tracker
-
-Manage your tasks using natural voice commands. All tasks are stored locally in `~/.whisper_tasks.json`.
-
-**Voice Commands:**
-
-All task commands start with "task" or "todo":
-
-**1. Add a task:**
-- Basic: "task add buy milk"
-- With priority: "task add buy groceries high priority"
-- With due date: "task add call dentist tomorrow"
-- With category: "task add finish report in work"
-- Full example: "task add buy groceries high priority tomorrow food"
-
-**2. Complete a task:**
-- "task complete buy milk"
-- "task complete groceries"
-
-**3. List tasks:**
-- All pending: "task list"
-- By priority: "task list high priority"
-- By category: "task list work"
-- Today's tasks: "task list today"
-
-**4. Archive a task:**
-- "task archive old task"
-- "task archive buy milk"
-
-**Menu Bar Integration:**
-
-The Tasks menu shows:
-- Pending task count in the title: "Tasks (3 pending)"
-- Top 5 pending tasks with priorities and due dates
-- 2 most recent completed tasks
-- Interactive options:
-  - Click any task to toggle complete/incomplete
-  - "Add Task (voice)" - triggers recording mode
-  - "List All Tasks" - reads all tasks via TTS
-  - "View All Tasks" - opens the JSON file
-
-**Task Features:**
-- **Priorities**: High, Medium, Low
-- **Due Dates**: Natural language (tomorrow, today, next monday, december 25)
-- **Categories**: Organize tasks by category/tag
-- **Voice Feedback**: Confirms each operation via TTS
-- **Fuzzy Matching**: "complete buy milk" matches "Buy groceries and milk"
-- **Persistent Storage**: All tasks saved to `~/.whisper_tasks.json`
-
-**Example Workflow:**
-```
-You: [Press Globe/Fn] "task add buy groceries high priority tomorrow" [Release]
-App: "Added task: buy groceries, high priority, due tomorrow"
-[Menu bar updates to show "Tasks (1 pending)"]
-
-You: [Press Globe/Fn] "task complete buy groceries" [Release]
-App: "Completed task: buy groceries"
-[Menu bar updates to show "Tasks (0 pending)"]
-```
-
-**Note**: Task parsing requires OpenAI API to be configured in `.env` for natural language understanding.
-
-You can also interact with the app through the menu bar icon:
-
-- Click "Start Recording" / "Stop Recording" to toggle recording
-- Click "Read Selected Text Aloud" for TTS
-- Select microphone from the "Microphone" submenu
-- Access "Tasks" menu to manage your task list
-- View status in the menu
-- Click "Quit" to exit the application
-
-## Permissions
-
-The app requires the following permissions:
-
-- Microphone access (to record your speech).  
-  Go to System Preferences → Security & Privacy → Privacy → Microphone and add your Terminal or the app.
-- Accessibility access (to simulate keyboard presses for pasting).  
-  Go to System Preferences → Security & Privacy → Privacy → Accessibility and add your Terminal or the app.
-
-## Requirements
-
-- macOS 10.14 or later
-- Microphone
-- OpenAI API key (optional - for AI text enhancement and/or cloud-based transcription)
+Grant these permissions in **System Preferences → Security & Privacy → Privacy**:
+- **Microphone** - for recording voice
+- **Accessibility** - for pasting text and keyboard shortcuts
 
 ## Troubleshooting
 
-### Stopping the Background Process
-
-**Easy way:**
+**Stop background process:**
 ```bash
 ./stop_background.sh
 ```
 
-**Manual way:**
-1. List the running process(es):
-```bash
-ps aux | grep 'src/main.py'
-```
+**TTS not working?**
+- Ensure OpenAI API key is set in `.env`
+- mpg123 is installed: `brew install mpg123`
 
-2. Kill the process by its PID:
-```bash
-kill -9 <PID>
-```
-
-### Common Issues
-
-**"The terminal has no selection to copy"** - This is normal when using Terminal. Use the app in TextEdit, Notes, or other apps to avoid this message.
-
-**Text not being replaced** - Make sure you:
-1. Have text selected before pressing Globe/Fn
-2. Keep the text editor window focused
-3. Have OPENAI_API_KEY set in .env
-4. Have OPENAI_DISABLE_SSL_VERIFY=true in .env
-
-**Recording not working** - Check:
-1. Microphone permissions granted
-2. Accessibility permissions granted
-3. Correct microphone selected in menu bar
+**See [CLAUDE.md](CLAUDE.md) for detailed technical documentation.**
