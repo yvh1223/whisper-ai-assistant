@@ -2,7 +2,6 @@
 # ABOUTME: OpenAI client for AI-powered text enhancement, STT, and TTS using GPT models
 import os
 import ssl
-import certifi
 from dotenv import load_dotenv
 from logger_config import setup_logging
 
@@ -39,9 +38,10 @@ class OpenAIClient:
                         limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
                     )
                 else:
-                    # Use certifi's CA bundle for SSL verification
+                    # Use system's CA bundle for SSL verification (includes Zscaler certs)
+                    ssl_cert_path = ssl.get_default_verify_paths().cafile
                     http_client = httpx.Client(
-                        verify=certifi.where(),
+                        verify=ssl_cert_path,
                         timeout=30.0,
                         limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
                     )
@@ -58,7 +58,8 @@ class OpenAIClient:
                 logger.info(f"  - Whisper mode: Auto-detect language → Transcribe → Auto-translate to English")
                 logger.info(f"  - TTS model: {self.tts_model}")
                 if not disable_ssl:
-                    logger.info(f"  - SSL certs: {certifi.where()}")
+                    ssl_cert_path = ssl.get_default_verify_paths().cafile
+                    logger.info(f"  - SSL certs: {ssl_cert_path}")
             else:
                 logger.warning("OPENAI_API_KEY not found in environment variables")
                 self.client = None

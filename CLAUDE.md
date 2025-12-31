@@ -34,8 +34,8 @@ Whisper Dictation is a macOS-only menu bar application for voice-to-text transcr
   - `OpenAIClient.translate_to_english()`: translates non-English text to English using GPT
   - `OpenAIClient.enhance_text()`: sends voice instruction + selected text to GPT for enhancement
   - `OpenAIClient.text_to_speech()`: converts text to speech using OpenAI TTS API, plays with afplay
-  - Uses openai Python library
-  - Configurable via `.env` (OPENAI_API_KEY, OPENAI_MODEL, OPENAI_WHISPER_MODEL, OPENAI_TTS_MODEL, OPENAI_TTS_VOICE, USE_OPENAI_WHISPER, etc.)
+  - Uses openai Python library with httpx client configured for system SSL certificates (Zscaler-compatible)
+  - Configurable via `.env` (OPENAI_API_KEY, OPENAI_MODEL, OPENAI_WHISPER_MODEL, OPENAI_TTS_MODEL, OPENAI_TTS_VOICE, USE_OPENAI_WHISPER, OPENAI_DISABLE_SSL_VERIFY, etc.)
 
 - **`src/text_selection.py`**: Clipboard-based text selection handling
   - `get_selected_text()`: Cmd+C to clipboard → read → restore original clipboard
@@ -57,7 +57,9 @@ Whisper Dictation is a macOS-only menu bar application for voice-to-text transcr
 
 **TTS Keywords**: "read", "speak", "say" - triggers text-to-speech instead of AI enhancement
 
-**Selection Size Limit**: Maximum 1000 characters to prevent accidental huge selections
+**Selection Size Limits**:
+- TTS: Maximum 4000 characters (truncated if exceeded)
+- AI Enhancement: Maximum 1000 characters (falls back to normal dictation if exceeded)
 
 ### Recording Triggers
 
@@ -68,17 +70,42 @@ Whisper Dictation is a macOS-only menu bar application for voice-to-text transcr
 
 ### Setup
 
+**Python Version**: Requires Python 3.12. Do NOT use Python 3.13 or 3.14 - they have SSL certificate issues with corporate proxies like Zscaler.
+
 ```bash
+# Create virtual environment with Python 3.12
+python3.12 -m venv venv
+source venv/bin/activate
+
 # Install dependencies
 pip install -r requirements.txt
 
 # Install PortAudio (required for PyAudio)
 brew install portaudio
 
+# Install mpg123 (backup audio player for TTS, recommended)
+brew install mpg123
+
 # Optional: Configure OpenAI API for AI enhancement and/or cloud transcription
 cp .env.example .env
 # Edit .env with OpenAI API key from https://platform.openai.com/api-keys
 ```
+
+### SSL Certificates
+
+The app uses system SSL certificates (`ssl.get_default_verify_paths().cafile`) instead of certifi's CA bundle. This ensures compatibility with corporate proxies like Zscaler that use custom certificates.
+
+- **Default**: SSL verification enabled using system certificates
+- **For local testing only**: Set `OPENAI_DISABLE_SSL_VERIFY=true` in `.env` to disable SSL verification (not recommended for production)
+
+### Audio Playback
+
+TTS audio playback uses multiple fallback players for reliability:
+1. **afplay** (macOS built-in) - tried first
+2. **mpg123** - fallback if afplay fails (recommended: `brew install mpg123`)
+3. **ffplay** - second fallback (from ffmpeg)
+
+If afplay fails with audio queue errors (common on macOS), mpg123 or ffplay will be used automatically.
 
 ### Running
 
@@ -123,6 +150,7 @@ kill -9 <PID>
 - `OPENAI_TTS_MODEL`: Text-to-speech model, default 'gpt-4o-mini-tts' at $12/1M chars (cheaper than 'tts-1' at $15/1M)
 - `OPENAI_TTS_VOICE`: TTS voice, default 'alloy' (options: alloy, echo, fable, onyx, nova, shimmer)
 - `USE_OPENAI_WHISPER`: Set to 'true' to use OpenAI Whisper API instead of local model, default 'false'
+- `OPENAI_DISABLE_SSL_VERIFY`: Set to 'true' to disable SSL verification (for local testing only), default 'false'
 - `LOG_LEVEL`: Default 'INFO'
 - `NO_COLOR`: Set to 'true' to disable colored logs
 

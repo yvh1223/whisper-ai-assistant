@@ -67,8 +67,14 @@ class WhisperDictationApp(rumps.App):
         self.mic_menu_mapping = {}  # Maps menu title to device index
         self.setup_microphone_menu()
 
-        # Add TTS menu item
+        # Add TTS menu items
         self.tts_menu_item = rumps.MenuItem("Read Selected Text Aloud")
+        self.stop_tts_menu_item = rumps.MenuItem("Stop Reading")
+        self.stop_tts_menu_item.set_callback(self.stop_tts)
+
+        # Track current audio playback process
+        self.current_audio_process = None
+        self.audio_process_lock = threading.Lock()
 
         # Initialize text selection handler
         self.text_selector = TextSelection()
@@ -82,9 +88,13 @@ class WhisperDictationApp(rumps.App):
         # Task submenu will be created in setup_task_menu() (must be after task_manager init)
         self.setup_task_menu()
 
+        # Initially hide the stop button
+        self.stop_tts_menu_item.title = None  # Hidden
+
         self.menu = [
             self.recording_menu_item,
             self.tts_menu_item,
+            self.stop_tts_menu_item,
             self.task_submenu,
             None,
             self.status_item
@@ -367,23 +377,53 @@ class WhisperDictationApp(rumps.App):
         tts_thread = threading.Thread(target=self._read_selected_text_worker)
         tts_thread.start()
 
+    def stop_tts(self, sender=None):
+        """Stop current TTS playback"""
+        with self.audio_process_lock:
+            if self.current_audio_process and self.current_audio_process.poll() is None:
+                logger.info("Stopping TTS playback...")
+                try:
+                    self.current_audio_process.terminate()
+                    time.sleep(0.1)
+                    if self.current_audio_process.poll() is None:
+                        self.current_audio_process.kill()
+                    logger.info("✓ TTS playback stopped")
+                    self.title = "🎙️"
+                    self.status_item.title = "Status: Playback stopped"
+                except Exception as e:
+                    logger.error(f"Error stopping TTS: {e}")
+            else:
+                logger.debug("No TTS playback to stop")
+
+        # Hide stop button
+        self.stop_tts_menu_item.title = None
+
     def _read_selected_text_worker(self):
         """Worker function to read selected text using TTS"""
         try:
-            # Get selected text
+            # Small delay to allow focus to return to the original app after clicking menu
+            time.sleep(0.2)
+
+            # Get selected text - try regular method first
             selected_text = self.text_selector.get_selected_text()
+
+            # Fallback to native method if regular method fails
+            if not selected_text:
+                logger.debug("Regular method failed, trying native NSPasteboard method...")
+                selected_text = self.text_selector.get_selected_text_native()
 
             if not selected_text:
                 self.status_item.title = "Status: No text selected"
                 logger.warning("No text selected for TTS")
                 return
 
-            # Limit to 1000 chars
-            if len(selected_text) > 1000:
-                logger.warning(f"Selected text too long ({len(selected_text)} chars) - trimming to 1000")
-                selected_text = selected_text[:1000]
+            # Limit to 4000 chars (OpenAI TTS API supports up to ~4096 chars)
+            if len(selected_text) > 4000:
+                logger.warning(f"Selected text too long ({len(selected_text)} chars) - trimming to 4000")
+                selected_text = selected_text[:4000]
 
-            logger.info(f"Reading aloud ({len(selected_text)} chars): {selected_text[:50]}...")
+            char_count = len(selected_text)
+            logger.info(f"Reading aloud ({char_count} chars): {selected_text[:50]}...")
             self.title = "🔊 (Reading...)"
             self.status_item.title = "Status: Reading text aloud..."
 
@@ -395,12 +435,14 @@ class WhisperDictationApp(rumps.App):
                 # Generate speech
                 self.openai_client.text_to_speech(selected_text, audio_file)
 
-                # Play the audio file
-                logger.info(f"Playing audio: {audio_file}")
-                subprocess.run(['afplay', audio_file], check=True)
+                # Play the audio file with fallback options (pass char count for better timeout estimation)
+                self._play_audio_file(audio_file, char_count=char_count)
 
                 # Clean up
-                os.unlink(audio_file)
+                try:
+                    os.unlink(audio_file)
+                except Exception as e:
+                    logger.warning(f"Could not delete temp audio file: {e}")
 
                 self.title = "🎙️"
                 self.status_item.title = "Status: ✓ Finished reading"
@@ -414,6 +456,116 @@ class WhisperDictationApp(rumps.App):
             logger.error(f"Error reading text aloud: {e}")
             self.title = "🎙️"
             self.status_item.title = f"Status: TTS error - {str(e)[:30]}"
+
+    def _play_audio_file(self, audio_file, char_count=None):
+        """
+        Play audio file with multiple fallback options.
+        Tries: afplay, mpg123, ffplay (in order)
+
+        Args:
+            audio_file: Path to MP3 file
+            char_count: Number of characters in the text (for timeout estimation)
+        """
+        logger.info(f"Playing audio: {audio_file}")
+
+        # Verify file exists and has content
+        if not os.path.exists(audio_file):
+            raise Exception(f"Audio file not found: {audio_file}")
+
+        file_size = os.path.getsize(audio_file)
+        if file_size == 0:
+            raise Exception("Generated audio file is empty")
+
+        logger.debug(f"Audio file size: {file_size} bytes")
+
+        # Calculate timeout based on character count (more accurate than file size)
+        # TTS speaks at ~150-200 words/min ≈ 750-1000 chars/min ≈ 12-17 chars/second
+        # Use conservative 10 chars/sec, add 50% buffer, minimum 30s, max 300s (5 min)
+        if char_count:
+            estimated_duration = (char_count / 10.0) * 1.5
+            timeout_seconds = int(max(30, min(300, estimated_duration)))
+            logger.info(f"Estimated audio duration: ~{int(char_count/10)}s ({char_count} chars), timeout: {timeout_seconds}s")
+        else:
+            # Fallback: use file size
+            estimated_duration = (file_size / 16000) * 1.5
+            timeout_seconds = int(max(30, min(300, estimated_duration)))
+            logger.debug(f"Timeout set to {timeout_seconds}s (based on file size)")
+
+        # Try multiple audio players in order of preference
+        players = [
+            ('afplay', ['afplay', audio_file]),
+            ('mpg123', ['mpg123', '-q', audio_file]),
+            ('ffplay', ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', audio_file])
+        ]
+
+        last_error = None
+        for player_name, command in players:
+            try:
+                # Check if player is available
+                check_cmd = ['which', player_name]
+                result = subprocess.run(check_cmd, capture_output=True, text=True, timeout=2)
+
+                if result.returncode != 0:
+                    logger.debug(f"{player_name} not available, trying next...")
+                    continue
+
+                logger.info(f"Using {player_name} to play audio")
+
+                # Show stop button
+                self.stop_tts_menu_item.title = "⏹ Stop Reading"
+
+                # Try to play the audio with dynamic timeout
+                with self.audio_process_lock:
+                    self.current_audio_process = subprocess.Popen(
+                        command,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True
+                    )
+
+                # Wait for playback to finish (with timeout)
+                try:
+                    stdout, stderr = self.current_audio_process.communicate(timeout=timeout_seconds)
+                    exit_code = self.current_audio_process.returncode
+
+                    if exit_code != 0:
+                        raise subprocess.CalledProcessError(exit_code, command, stdout, stderr)
+
+                    logger.info(f"✓ Audio played successfully with {player_name}")
+
+                    # Hide stop button
+                    self.stop_tts_menu_item.title = None
+                    return  # Success!
+
+                except subprocess.TimeoutExpired:
+                    # Timeout - kill process and try next player
+                    with self.audio_process_lock:
+                        if self.current_audio_process:
+                            self.current_audio_process.kill()
+                            self.current_audio_process = None
+                    raise
+
+            except subprocess.TimeoutExpired:
+                last_error = f"{player_name} timed out"
+                logger.warning(f"{player_name} timed out, trying next player...")
+                continue
+            except subprocess.CalledProcessError as e:
+                last_error = f"{player_name} failed: {e.stderr if e.stderr else e}"
+                logger.warning(f"{player_name} failed (exit code {e.returncode})")
+                if e.stderr:
+                    logger.debug(f"  Error output: {e.stderr}")
+                continue
+            except Exception as e:
+                last_error = f"{player_name} error: {e}"
+                logger.warning(f"{player_name} error: {e}")
+                continue
+
+        # All players failed - hide stop button and raise error
+        self.stop_tts_menu_item.title = None
+        error_msg = f"All audio players failed. Last error: {last_error}"
+        logger.error(error_msg)
+        logger.error("Tip: Install mpg123 with: brew install mpg123")
+        raise Exception(error_msg)
 
     def start_recording(self):
         if not hasattr(self, 'model') or self.model is None:
@@ -449,12 +601,6 @@ class WhisperDictationApp(rumps.App):
 
         # Check for selected text NOW (while focus might still be on the text editor)
         self.cached_selected_text = self.text_selector.get_selected_text()
-
-        # Limit selection size to avoid accidents (max 1000 chars)
-        if self.cached_selected_text and len(self.cached_selected_text) > 1000:
-            logger.warning(f"⚠️  Selected text too large ({len(self.cached_selected_text)} chars) - ignoring")
-            logger.warning("   Maximum 1000 characters. Using normal dictation mode.")
-            self.cached_selected_text = None
 
         if self.cached_selected_text:
             logger.info(f"✓ Selected text captured ({len(self.cached_selected_text)} chars): '{self.cached_selected_text[:50]}...'")
@@ -589,6 +735,15 @@ class WhisperDictationApp(rumps.App):
                     if is_tts_request:
                         # TTS mode - read the selected text aloud
                         logger.info("Detected TTS request - reading text aloud")
+
+                        # Check TTS text size limit (OpenAI TTS supports up to ~4096 chars)
+                        if len(selected_text) > 4000:
+                            logger.warning(f"⚠️  Selected text too large for TTS ({len(selected_text)} chars)")
+                            logger.warning("   Maximum 4000 characters for TTS. Truncating...")
+                            selected_text = selected_text[:4000]
+
+                        char_count = len(selected_text)
+
                         try:
                             self.title = "🔊 (Reading...)"
                             self.status_item.title = "Status: Reading text aloud..."
@@ -599,12 +754,14 @@ class WhisperDictationApp(rumps.App):
                             # Generate speech
                             self.openai_client.text_to_speech(selected_text, audio_file)
 
-                            # Play the audio file
-                            logger.info(f"Playing audio: {audio_file}")
-                            subprocess.run(['afplay', audio_file], check=True)
+                            # Play the audio file with fallback options (pass char count for better timeout estimation)
+                            self._play_audio_file(audio_file, char_count=char_count)
 
                             # Clean up
-                            os.unlink(audio_file)
+                            try:
+                                os.unlink(audio_file)
+                            except Exception as e:
+                                logger.warning(f"Could not delete temp audio file: {e}")
 
                             self.title = "🎙️"
                             self.status_item.title = "Status: ✓ Finished reading"
@@ -617,30 +774,44 @@ class WhisperDictationApp(rumps.App):
 
                     else:
                         # AI Enhancement mode - modify the text
-                        try:
-                            # Use OpenAI to enhance the selected text
-                            self.title = "🎙️ (Calling AI...)"
-                            self.status_item.title = "Status: Calling AI..."
-                            enhanced_text = self.openai_client.enhance_text(text, selected_text)
 
-                            # Replace selected text with enhanced version
-                            self.title = "🎙️ (Replacing...)"
-                            self.status_item.title = "Status: Replacing text..."
+                        # Check AI enhancement text size limit (to avoid huge API calls)
+                        if len(selected_text) > 1000:
+                            logger.warning(f"⚠️  Selected text too large for AI enhancement ({len(selected_text)} chars)")
+                            logger.warning("   Maximum 1000 characters for AI enhancement. Using normal dictation mode instead.")
+                            # Fall through to normal dictation
+                            selected_text = None
 
-                            # Pass original text so it can find and replace it
-                            self.text_selector.replace_selected_text(enhanced_text, original_text=selected_text)
+                        if selected_text:
+                            try:
+                                # Use OpenAI to enhance the selected text
+                                self.title = "🎙️ (Calling AI...)"
+                                self.status_item.title = "Status: Calling AI..."
+                                enhanced_text = self.openai_client.enhance_text(text, selected_text)
 
-                            logger.info(f"✓ Enhanced: {enhanced_text}")
-                            self.title = "🎙️"
-                            self.status_item.title = f"Status: ✓ Enhanced"
+                                # Replace selected text with enhanced version
+                                self.title = "🎙️ (Replacing...)"
+                                self.status_item.title = "Status: Replacing text..."
 
-                        except Exception as e:
-                            logger.error(f"Error enhancing text: {e}")
-                            self.title = "🎙️"
-                            # Fallback to normal text insertion
+                                # Pass original text so it can find and replace it
+                                self.text_selector.replace_selected_text(enhanced_text, original_text=selected_text)
+
+                                logger.info(f"✓ Enhanced: {enhanced_text}")
+                                self.title = "🎙️"
+                                self.status_item.title = f"Status: ✓ Enhanced"
+
+                            except Exception as e:
+                                logger.error(f"Error enhancing text: {e}")
+                                self.title = "🎙️"
+                                # Fallback to normal text insertion
+                                self.insert_text(text)
+                                logger.info(f"Transcription (fallback): {text}")
+                                self.status_item.title = f"Status: Fallback - {text[:30]}..."
+                        else:
+                            # Selection was too large, fall back to normal dictation
                             self.insert_text(text)
-                            logger.info(f"Transcription (fallback): {text}")
-                            self.status_item.title = f"Status: Fallback - {text[:30]}..."
+                            logger.info(f"Transcription: {text}")
+                            self.status_item.title = f"Status: Transcribed: {text[:30]}..."
                 else:
                     # No selected text or Bedrock unavailable - normal insertion
                     self.insert_text(text)
@@ -783,8 +954,12 @@ class WhisperDictationApp(rumps.App):
                 audio_file = temp_audio.name
 
             self.openai_client.text_to_speech(message, audio_file)
-            subprocess.run(['afplay', audio_file], check=True)
-            os.unlink(audio_file)
+            self._play_audio_file(audio_file)
+
+            try:
+                os.unlink(audio_file)
+            except Exception as e:
+                logger.warning(f"Could not delete temp audio file: {e}")
 
             self.title = "🎙️"
         except Exception as e:

@@ -20,32 +20,35 @@ class TextSelection:
         try:
             # Save current clipboard content
             original_clipboard = pyperclip.paste()
-            
-            # Clear clipboard to detect if copy operation succeeds
-            pyperclip.copy("")
-            time.sleep(0.1)
-            
+
+            # Clear clipboard with a unique marker to detect if copy operation succeeds
+            marker = "___WHISPER_DICTATION_MARKER___"
+            pyperclip.copy(marker)
+            time.sleep(0.15)
+
             # Copy selected text to clipboard
             with self.keyboard_controller.pressed(Key.cmd):
                 self.keyboard_controller.press('c')
                 self.keyboard_controller.release('c')
-            
-            # Small delay to ensure copy operation completes
-            time.sleep(0.2)
-            
+
+            # Longer delay to ensure copy operation completes
+            time.sleep(0.3)
+
             # Get the copied text
             selected_text = pyperclip.paste()
-            logger.debug(f"Copied text: {selected_text}")
-            
+            logger.debug(f"Clipboard after copy: '{selected_text[:100] if selected_text else 'None'}...'")
+
             # Restore original clipboard content
             pyperclip.copy(original_clipboard)
-            
-            # Return selected text if it's not empty and different from original
-            if selected_text and selected_text != original_clipboard:
+
+            # Return selected text if it changed from the marker (meaning copy succeeded)
+            if selected_text and selected_text != marker:
+                logger.info(f"✓ Selected text captured ({len(selected_text)} chars)")
                 return selected_text.strip()
-            
+
+            logger.debug("No text was selected (clipboard unchanged)")
             return None
-            
+
         except Exception as e:
             logger.error(f"Error getting selected text: {e}")
             return None
