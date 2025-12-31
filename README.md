@@ -2,14 +2,34 @@
 
 **macOS-only** menu bar app for voice-to-text dictation using OpenAI's Whisper model.
 
-## Features
+## Core Feature: Voice-to-Text Dictation
 
-- **Voice Dictation** - Press Globe/Fn key to record, transcribe, and paste text
-- **AI Text Enhancement** - Select text + voice command to modify it with AI
-- **Text-to-Speech** - Read selected text aloud with natural voice
-- **Task Manager** - Voice-controlled task tracking with priorities and due dates
+Press a key, speak, and your words appear as text - anywhere.
 
-## How It Works
+```mermaid
+flowchart LR
+    Start([Press Globe/Fn]) --> Record[🎙️ Speak]
+    Record --> Stop([Press Globe/Fn])
+    Stop --> Whisper[🤖 Transcribe]
+    Whisper --> Paste[📝 Paste Text]
+
+    style Start fill:#90EE90
+    style Paste fill:#90EE90
+    style Record fill:#FFB6C1
+    style Whisper fill:#87CEEB
+```
+
+**That's it.** No typing needed. Works in any app - email, notes, code editor, anywhere you can type.
+
+## Additional Features
+
+The app also supports advanced AI-powered features:
+- **AI Text Enhancement** - Select text + voice command → AI modifies it
+- **Text-to-Speech** - Select text → have it read aloud
+- **Task Manager** - Voice-controlled tasks with priorities and due dates
+
+<details>
+<summary>See how advanced features work (click to expand)</summary>
 
 ```mermaid
 flowchart TD
@@ -43,6 +63,7 @@ flowchart TD
     style TTS fill:#DDA0DD
     style Task fill:#F0E68C
 ```
+</details>
 
 ## Quick Setup
 
@@ -63,25 +84,34 @@ cp .env.example .env
 
 ## Usage
 
-**Dictation:**
-- Press **Globe/Fn** to start recording
-- Speak clearly
-- Press **Globe/Fn** again to stop → text appears at cursor
+### Basic Dictation (Main Feature)
 
-**AI Enhancement:**
+1. Press **Globe/Fn** key (bottom right of keyboard)
+2. Speak your message
+3. Press **Globe/Fn** again
+4. ✨ Text appears at your cursor
+
+Works everywhere - emails, documents, code editors, chat apps, anywhere you can type.
+
+<details>
+<summary>Advanced Features Usage (click to expand)</summary>
+
+### AI Enhancement
 - Select text
 - Press **Globe/Fn** and say: "make this professional" or "translate to Spanish"
 - Press **Globe/Fn** again → text is replaced
 
-**Text-to-Speech:**
+### Text-to-Speech
 - Select text
 - Click menu bar → "Read Selected Text Aloud"
 - Or say "read this" while text is selected
 
-**Tasks:**
+### Task Management
 - Say "task add buy milk tomorrow high priority"
 - Say "task complete buy milk"
 - View tasks in menu bar
+
+</details>
 
 ## Permissions Required
 
