@@ -8,18 +8,17 @@ Press a key, speak, and your words appear as text - anywhere.
 
 ```mermaid
 flowchart LR
-    Start([Press Globe/Fn]) --> Record[🎙️ Speak]
-    Record --> Stop([Press Globe/Fn])
-    Stop --> Whisper[🤖 Transcribe]
-    Whisper --> Paste[📝 Paste Text]
+    Record[🎙️ Record Voice] --> Transcribe[🤖 Transcribe]
+    Transcribe --> Paste[📝 Paste Text]
 
-    style Start fill:#90EE90
-    style Paste fill:#90EE90
     style Record fill:#FFB6C1
-    style Whisper fill:#87CEEB
+    style Transcribe fill:#87CEEB
+    style Paste fill:#90EE90
 ```
 
-**That's it.** No typing needed. Works in any app - email, notes, code editor, anywhere you can type.
+**How?** Press **Globe/Fn** to start → speak → press **Globe/Fn** to stop. Done.
+
+Works in any app - email, notes, code editor, chat, anywhere you can type.
 
 ## Additional Features
 
