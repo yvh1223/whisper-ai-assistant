@@ -1,111 +1,132 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Technical documentation for Claude Code when working with this repository.
 
 ## Project Overview
 
-Whisper Dictation is a macOS-only menu bar application for voice-to-text transcription using OpenAI's Whisper model (locally or via API). It supports four modes:
-1. **Standard dictation**: Press Globe/Fn key to record → release to transcribe → paste at cursor
-2. **AI-enhanced text editing**: Select text → press Globe/Fn → speak instruction → AI modifies selected text using OpenAI GPT models
-3. **Text-to-Speech (TTS)**: Select text → say "read this" OR click menu bar option → text is read aloud with natural voice
-4. **Task Management**: Add/manage tasks via voice or typing from menu bar
+**Whisper Dictation** - macOS menu bar app for voice-to-text transcription using OpenAI's Whisper model (local or cloud).
 
-**Multi-language Support**: Speak in any language → get English text automatically. Uses `gpt-4o-mini-transcribe` to transcribe, then auto-detects non-English and translates using GPT. Cost-optimized: English-only costs $0.003/min, other languages cost $0.003/min + small GPT translation fee (still cheaper than whisper-1's $0.006/min).
+### Features
 
-**Task Management**:
-- Add tasks by **typing** (menu → Tasks → Add Task (type)) - just type "buy milk tomorrow"
-- Add tasks by **voice** (menu → Tasks → Add Task (voice)) - say "task add buy milk tomorrow"
-- View/complete tasks from menu bar
-- Natural language parsing: "high priority", "tomorrow", "by friday", etc.
+1. **Voice Dictation** - Press Globe/Fn key → record → transcribe → paste at cursor
+2. **AI Text Enhancement** - Select text + voice instruction → AI modifies text using GPT
+3. **Text-to-Speech (TTS)** - Select text → "read this" OR menu click → natural voice playback
+4. **Task Management** - Voice-controlled task tracking with priorities, due dates, categories
+
+### Multi-language Support
+
+Speak in any language → get English text automatically:
+- Uses `gpt-4o-mini-transcribe` ($0.003/min) for transcription
+- Auto-detects non-English and translates using GPT
+- Cost-optimized: cheaper than `whisper-1` ($0.006/min)
 
 ## Architecture
 
 ### Core Components
 
-- **`src/main.py`**: Main application entry point
-  - `WhisperDictationApp`: rumps-based menu bar app managing lifecycle, UI, recording, and transcription
-  - Global key listeners for Globe/Fn key (vk=63) and Right Shift key
-  - Right Shift has optimistic recording: starts immediately, discards if released <0.75s, processes if held longer
-  - Threading model: separate threads for model loading, keyboard monitoring, recording, and transcription
+**`src/main.py`** - Main application entry point
+- `WhisperDictationApp`: rumps-based menu bar app
+- Global key listeners: Globe/Fn (vk=63) and Right Shift keys
+- Threading: separate threads for model loading, keyboard monitoring, recording, transcription
+- Audio playback: multi-fallback player system (afplay → mpg123 → ffplay)
+- TTS controls: "Stop Reading" button, dynamic timeout based on text length
 
-- **`src/openai_client.py`**: OpenAI API integration for STT, text enhancement, and TTS
-  - `OpenAIClient.transcribe_audio()`: transcribes audio using OpenAI Whisper API → auto-detects language → transcribes with gpt-4o-mini-transcribe → auto-translates to English if needed using GPT
-  - `OpenAIClient.is_english()`: detects non-Latin scripts (Hindi/Devanagari, Arabic, Chinese, Japanese, Korean)
-  - `OpenAIClient.translate_to_english()`: translates non-English text to English using GPT
-  - `OpenAIClient.enhance_text()`: sends voice instruction + selected text to GPT for enhancement
-  - `OpenAIClient.text_to_speech()`: converts text to speech using OpenAI TTS API, plays with afplay
-  - Uses openai Python library with httpx client configured for system SSL certificates (Zscaler-compatible)
-  - Configurable via `.env` (OPENAI_API_KEY, OPENAI_MODEL, OPENAI_WHISPER_MODEL, OPENAI_TTS_MODEL, OPENAI_TTS_VOICE, USE_OPENAI_WHISPER, OPENAI_DISABLE_SSL_VERIFY, etc.)
+**`src/openai_client.py`** - OpenAI API integration
+- `transcribe_audio()`: Whisper transcription with auto-translation to English
+- `is_english()`: detects non-Latin scripts (Hindi, Arabic, Chinese, Japanese, Korean)
+- `translate_to_english()`: GPT-based translation
+- `enhance_text()`: voice instruction + selected text → GPT enhancement
+- `text_to_speech()`: OpenAI TTS API → MP3 generation
+- `parse_task_command()`: natural language task parsing via GPT
+- SSL: Uses system certificates (`ssl.get_default_verify_paths().cafile`) for Zscaler compatibility
+- Configuration: `.env` (API key, models, SSL settings)
 
-- **`src/text_selection.py`**: Clipboard-based text selection handling
-  - `get_selected_text()`: Cmd+C to clipboard → read → restore original clipboard
-  - `replace_selected_text()`: Types replacement text (overwrites selection)
+**`src/text_selection.py`** - Clipboard-based text selection
+- `get_selected_text()`: Cmd+C → clipboard → read → restore (uses unique marker for reliability)
+- `get_selected_text_native()`: NSPasteboard fallback method
+- `replace_selected_text()`: types replacement text to overwrite selection
+- Improved timing: 0.15s pre-copy delay, 0.3s post-copy delay
 
-- **`src/recording_indicator.py`**: Visual feedback via menu bar icon
-  - Updates icon based on audio RMS levels: 🔴 (loud) → 🟡 (medium) → 🟢 (quiet) → ⚪ (silence)
+**`src/task_manager.py`** - Task management system
+- JSON-based storage (`~/.whisper_tasks.json`)
+- Natural language parsing via GPT
+- Fallback regex parser for offline use
+- Priority levels: high, medium, low
+- Due date parsing: "tomorrow", "next monday", "december 25"
+- Category/tag support
 
-- **`src/logger_config.py`**: Colored logging setup with LOG_LEVEL support
+**`src/recording_indicator.py`** - Visual feedback
+- RMS-based audio level indicator: 🔴 (loud) → 🟡 (medium) → 🟢 (quiet) → ⚪ (silence)
+
+**`src/logger_config.py`** - Logging configuration
+- Colored logs with LOG_LEVEL support
+- NO_COLOR environment variable support
 
 ### Key Workflow
 
-1. Globe/Fn key pressed → `start_recording()` → spawns `record_audio()` thread → fills `self.frames` buffer
-2. Globe/Fn key released → `stop_recording()` → captures selected text → spawns `process_recording()` thread
-3. `transcribe_audio()`: saves frames to temp WAV → Whisper auto-detects language & transcribes (local model uses task="translate" for English, OpenAI API uses transcriptions endpoint) → if non-English detected, auto-translates to English using GPT
-4. **If selected text + voice contains TTS keywords** (read/speak/say): `openai_client.text_to_speech()` → generates MP3 → plays with afplay
-5. **If selected text + OpenAI available** (non-TTS): `openai_client.enhance_text()` → replace selection with enhanced text
-6. **If no selection**: `insert_text()` → types transcribed text at cursor (always in English)
+1. **Recording Start**: Globe/Fn pressed → `start_recording()` → spawns recording thread → fills audio buffer
+2. **Recording Stop**: Globe/Fn released → `stop_recording()` → captures selected text → spawns `process_recording()` thread
+3. **Transcription**: Save frames to temp WAV → Whisper transcribes (local: `task="translate"`, cloud: API) → auto-translate if non-English
+4. **Decision Tree**:
+   - **Task command detected** ("task add..."): `task_manager.parse_command()` → save to JSON → voice feedback
+   - **TTS request + selected text** ("read this"): `text_to_speech()` → generate MP3 → play audio (with stop button)
+   - **Selected text + OpenAI available**: `enhance_text()` → replace selection
+   - **No selection**: `insert_text()` → paste at cursor
 
-**TTS Keywords**: "read", "speak", "say" - triggers text-to-speech instead of AI enhancement
+### TTS Implementation Details
 
-**Selection Size Limits**:
-- TTS: Maximum 4000 characters (truncated if exceeded)
-- AI Enhancement: Maximum 1000 characters (falls back to normal dictation if exceeded)
+**Keywords**: "read", "speak", "say" trigger TTS mode
+
+**Size Limits**:
+- TTS: 4000 chars (truncated if exceeded)
+- AI Enhancement: 1000 chars (falls back to dictation if exceeded)
+
+**Audio Playback**:
+- Multi-fallback: afplay → mpg123 → ffplay
+- Dynamic timeout: `(char_count / 10.0) * 1.5` seconds (min 30s, max 300s)
+- Process management: uses `Popen()` with thread-safe locking for stop control
+- Stop button: shows during playback, terminates audio process
+
+**Text Selection**:
+- Uses unique marker (`___WHISPER_DICTATION_MARKER___`) to detect successful clipboard copy
+- Fallback to native NSPasteboard method if regular method fails
+- 0.2s delay after menu click to allow focus return
 
 ### Recording Triggers
 
-- **Globe/Fn key (vk=63)**: Toggle recording on release (must press twice: once to start, once to stop)
-- **Right Shift**: Hold to record immediately, release >0.75s to process, <0.75s to discard
+- **Globe/Fn key (vk=63)**: Toggle recording (press to start, press again to stop)
+- **Right Shift**: Hold to record, release >0.75s to process, <0.75s to discard
 
 ## Development
 
+### Python Version Requirement
+
+**Python 3.12 ONLY** - Do NOT use 3.13 or 3.14 (SSL certificate issues with corporate proxies like Zscaler)
+
 ### Setup
 
-**Python Version**: Requires Python 3.12. Do NOT use Python 3.13 or 3.14 - they have SSL certificate issues with corporate proxies like Zscaler.
-
 ```bash
-# Create virtual environment with Python 3.12
+# Create venv with Python 3.12
 python3.12 -m venv venv
 source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Install PortAudio (required for PyAudio)
-brew install portaudio
+# Install system dependencies
+brew install portaudio  # Required for PyAudio
+brew install mpg123     # Backup audio player for TTS (recommended)
 
-# Install mpg123 (backup audio player for TTS, recommended)
-brew install mpg123
-
-# Optional: Configure OpenAI API for AI enhancement and/or cloud transcription
+# Configure OpenAI API (optional)
 cp .env.example .env
-# Edit .env with OpenAI API key from https://platform.openai.com/api-keys
+# Edit .env with API key from https://platform.openai.com/api-keys
 ```
 
 ### SSL Certificates
 
-The app uses system SSL certificates (`ssl.get_default_verify_paths().cafile`) instead of certifi's CA bundle. This ensures compatibility with corporate proxies like Zscaler that use custom certificates.
-
-- **Default**: SSL verification enabled using system certificates
-- **For local testing only**: Set `OPENAI_DISABLE_SSL_VERIFY=true` in `.env` to disable SSL verification (not recommended for production)
-
-### Audio Playback
-
-TTS audio playback uses multiple fallback players for reliability:
-1. **afplay** (macOS built-in) - tried first
-2. **mpg123** - fallback if afplay fails (recommended: `brew install mpg123`)
-3. **ffplay** - second fallback (from ffmpeg)
-
-If afplay fails with audio queue errors (common on macOS), mpg123 or ffplay will be used automatically.
+Uses **system SSL certificates** instead of certifi for Zscaler proxy compatibility:
+- Default: SSL verification enabled via `ssl.get_default_verify_paths().cafile`
+- Testing only: Set `OPENAI_DISABLE_SSL_VERIFY=true` in `.env` (not recommended)
 
 ### Running
 
@@ -114,50 +135,113 @@ If afplay fails with audio queue errors (common on macOS), mpg123 or ffplay will
 python src/main.py
 
 # Background mode
+./run.sh
+# or
 nohup ./run.sh >/dev/null 2>&1 & disown
 ```
 
 ### Testing
 
-**Before making changes**: Verify all imports work. This app uses macOS-specific libraries (rumps, AppKit, pynput) that require macOS + accessibility permissions.
+- Verify all imports work (macOS-specific: rumps, AppKit, pynput)
+- Requires macOS with Microphone + Accessibility permissions
+- Test audio players: `which afplay mpg123 ffplay`
 
 ### Debugging
 
-Kill background processes:
 ```bash
+# Kill background processes
 ps aux | grep 'src/main.py'
 kill -9 <PID>
+
+# Enable debug logging
+# Add to .env:
+LOG_LEVEL=DEBUG
 ```
-
-## macOS Permissions Required
-
-- **Microphone**: System Preferences → Security & Privacy → Privacy → Microphone
-- **Accessibility**: System Preferences → Security & Privacy → Privacy → Accessibility
 
 ## Dependencies
 
-- **Audio**: pyaudio, faster-whisper (local Whisper model), openai (optional cloud transcription)
+**Core**:
+- **Audio**: pyaudio, faster-whisper (local Whisper), openai (cloud)
 - **UI**: rumps (menu bar), pyobjc (macOS APIs)
 - **Input**: pynput (keyboard monitoring)
-- **Cloud**: openai (GPT text enhancement, Whisper API, TTS), python-dotenv
+- **Cloud**: openai (GPT, Whisper API, TTS), python-dotenv
 - **Clipboard**: pyperclip, AppKit.NSPasteboard
+
+**System**:
+- portaudio (brew)
+- mpg123 (brew, optional but recommended for TTS)
 
 ## Environment Variables
 
-- `OPENAI_API_KEY`: Your OpenAI API key (required for AI features)
-- `OPENAI_MODEL`: Text enhancement and translation model, default 'gpt-5-nano' (also used for auto-translating non-English to English)
-- `OPENAI_WHISPER_MODEL`: Whisper model for transcription, default 'gpt-4o-mini-transcribe' at $0.003/min (auto-translates to English via GPT if non-English detected)
-- `OPENAI_TTS_MODEL`: Text-to-speech model, default 'gpt-4o-mini-tts' at $12/1M chars (cheaper than 'tts-1' at $15/1M)
-- `OPENAI_TTS_VOICE`: TTS voice, default 'alloy' (options: alloy, echo, fable, onyx, nova, shimmer)
-- `USE_OPENAI_WHISPER`: Set to 'true' to use OpenAI Whisper API instead of local model, default 'false'
-- `OPENAI_DISABLE_SSL_VERIFY`: Set to 'true' to disable SSL verification (for local testing only), default 'false'
-- `LOG_LEVEL`: Default 'INFO'
-- `NO_COLOR`: Set to 'true' to disable colored logs
+```bash
+# Required for AI features
+OPENAI_API_KEY=sk-...
+
+# Model configuration
+OPENAI_MODEL=gpt-5-nano              # Text enhancement, translation
+OPENAI_TASK_MODEL=gpt-5-mini         # Task parsing
+OPENAI_WHISPER_MODEL=gpt-4o-mini-transcribe  # $0.003/min
+OPENAI_TTS_MODEL=gpt-4o-mini-tts     # $12/1M chars
+OPENAI_TTS_VOICE=alloy               # alloy/echo/fable/onyx/nova/shimmer
+
+# Transcription
+USE_OPENAI_WHISPER=false             # true = cloud, false = local
+
+# SSL (Zscaler compatibility)
+OPENAI_DISABLE_SSL_VERIFY=false      # true = disable (testing only)
+
+# Logging
+LOG_LEVEL=INFO                       # DEBUG/INFO/WARNING/ERROR
+NO_COLOR=false                       # true = disable colored logs
+```
+
+## macOS Permissions
+
+Grant in **System Preferences → Security & Privacy → Privacy**:
+- **Microphone** - for audio recording
+- **Accessibility** - for keyboard shortcuts and text pasting
 
 ## Known Limitations
 
-- macOS only (uses AppKit, pynput macOS features)
-- Local Whisper model loads on startup (medium.en) - can take several seconds
-- Clipboard-based text selection may be unreliable in some apps
-- Globe/Fn key detection requires accessibility permissions
-- OpenAI Whisper API has a 25 MB file size limit for audio transcription
+- **macOS only** - uses AppKit, pynput macOS features
+- **Model load time** - local Whisper medium.en takes several seconds on startup
+- **Clipboard reliability** - may be unreliable in some apps (uses fallback methods)
+- **Globe/Fn key** - requires Accessibility permissions
+- **Audio file size** - OpenAI Whisper API: 25 MB limit
+- **TTS character limit** - OpenAI TTS API: ~4096 chars
+
+## File Organization
+
+```
+whisper-dictation/
+├── src/                    # Source code
+│   ├── main.py            # Main app entry point
+│   ├── openai_client.py   # OpenAI API integration
+│   ├── text_selection.py  # Clipboard handling
+│   ├── task_manager.py    # Task management
+│   ├── recording_indicator.py  # Visual feedback
+│   └── logger_config.py   # Logging setup
+├── test/                   # Unit tests
+├── archive/               # Archived files (gitignored)
+├── .env                   # API keys (gitignored)
+├── .env.example           # Template
+├── requirements.txt       # Python dependencies
+├── run.sh                 # Run script
+├── CLAUDE.md             # This file
+└── README.md             # User-facing docs
+```
+
+## Development Tips
+
+1. **SSL issues?** Check that you're using system certs, not certifi
+2. **TTS not playing?** Install mpg123 (`brew install mpg123`)
+3. **Selection not working?** Enable DEBUG logging to see clipboard operations
+4. **Task parsing failing?** Check OpenAI API key and model settings
+5. **Audio timeout?** Dynamic timeout should handle long text, check logs for timeout value
+
+## Cost Optimization
+
+- **Whisper**: Use `gpt-4o-mini-transcribe` ($0.003/min) instead of `whisper-1` ($0.006/min)
+- **TTS**: Use `gpt-4o-mini-tts` ($12/1M chars) instead of `tts-1` ($15/1M)
+- **Translation**: Only translates if non-English detected (saves API calls)
+- **Local Whisper**: Set `USE_OPENAI_WHISPER=false` for $0 transcription (slower)
