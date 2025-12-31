@@ -21,14 +21,14 @@ flowchart TD
     Whisper --> Paste[📝 Paste at Cursor]
 
     Check -->|Yes| CheckCmd{Voice Command?}
-    CheckCmd -->|"read this"<br/>"speak"| TTS[🔊 Text-to-Speech]
+    CheckCmd -->|read this / speak| TTS[🔊 Text-to-Speech]
     TTS --> Play[▶️ Play Audio]
 
-    CheckCmd -->|"task add..."| Task[📋 Task Manager]
+    CheckCmd -->|task add...| Task[📋 Task Manager]
     Task --> Store[(Save to JSON)]
     Store --> Feedback[🔔 Voice Feedback]
 
-    CheckCmd -->|Other<br/>Instructions| AI[🤖 AI Enhancement]
+    CheckCmd -->|Other Instructions| AI[🤖 AI Enhancement]
     AI --> Replace[✏️ Replace Selected Text]
 
     Play --> Done([Done])
