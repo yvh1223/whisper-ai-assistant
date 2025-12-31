@@ -55,8 +55,8 @@ class WhisperDictationApp(rumps.App):
         self.cached_selected_text = None  # Cache selected text when recording stops
 
         # App lifecycle tracking
-        self.app_start_time = time.time()
-        self.max_app_runtime = 4 * 60 * 60  # 4 hours in seconds
+        self.last_activity_time = time.time()
+        self.max_inactivity_time = 4 * 60 * 60  # 4 hours of inactivity
         self.max_recording_duration = 15 * 60  # 15 minutes in seconds
 
         # Microphone selection (None = use default)
@@ -161,14 +161,14 @@ class WhisperDictationApp(rumps.App):
                 os._exit(0)
                 break
 
-            # Check if app has been running too long (4 hours)
-            app_runtime = time.time() - self.app_start_time
-            if app_runtime > self.max_app_runtime:
-                logger.warning(f"⚠️  App has been running for {app_runtime/3600:.1f} hours - auto-shutting down for safety")
+            # Check if app has been inactive too long (4 hours)
+            inactive_time = time.time() - self.last_activity_time
+            if inactive_time > self.max_inactivity_time:
+                logger.warning(f"⚠️  No activity for {inactive_time/3600:.1f} hours - auto-shutting down for safety")
                 rumps.notification(
                     title="Whisper Dictation Auto-Shutdown",
-                    subtitle="App has been running for 4+ hours",
-                    message="Automatically shutting down for safety. Restart when needed."
+                    subtitle="Inactive for 4+ hours",
+                    message="Automatically shutting down due to inactivity. Restart when needed."
                 )
                 time.sleep(2)  # Give notification time to show
                 self.cleanup()
@@ -370,9 +370,14 @@ class WhisperDictationApp(rumps.App):
         self.stop_recording()
         sender.title = "Start Recording"
 
+    def update_activity(self):
+        """Update last activity timestamp"""
+        self.last_activity_time = time.time()
+
     @rumps.clicked("Read Selected Text Aloud")
     def read_selected_text(self, sender):
         """Read selected text using TTS"""
+        self.update_activity()
         # Run in background thread to avoid blocking UI
         tts_thread = threading.Thread(target=self._read_selected_text_worker)
         tts_thread.start()
@@ -573,6 +578,7 @@ class WhisperDictationApp(rumps.App):
             self.status_item.title = "Status: Waiting for model to load"
             return
 
+        self.update_activity()  # Update activity timestamp
         self.frames = []
         self.recording = True
         self.recording_start_time = time.time()  # Track when recording started
@@ -591,6 +597,7 @@ class WhisperDictationApp(rumps.App):
         self.recording_thread.start()
     
     def stop_recording(self):
+        self.update_activity()  # Update activity timestamp
         self.recording = False
         self.recording_start_time = None  # Clear recording start time
         if hasattr(self, 'recording_thread'):
@@ -885,6 +892,7 @@ class WhisperDictationApp(rumps.App):
 
     def process_task_command(self, text):
         """Process voice task command"""
+        self.update_activity()  # Update activity timestamp
         try:
             # Parse command
             parsed = self.task_manager.parse_command(text)
@@ -1028,6 +1036,7 @@ class WhisperDictationApp(rumps.App):
 
     def toggle_task_from_menu(self, task):
         """Toggle task completion from menu click"""
+        self.update_activity()  # Update activity timestamp
         try:
             if task['status'] == 'pending':
                 self.task_manager.complete_task(task['id'])
