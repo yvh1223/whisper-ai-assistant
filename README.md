@@ -77,9 +77,30 @@ brew install portaudio mpg123
 cp .env.example .env
 # Edit .env with your OpenAI API key from https://platform.openai.com/api-keys
 
-# 3. Run the app
+# 3. (Optional) Configure Zscaler certificate if using corporate proxy
+# Skip this step if not using Zscaler or your company doesn't use it
+# See "Zscaler Setup" section below
+
+# 4. Run the app
 ./run.sh
 ```
+
+### Zscaler Setup (Corporate Proxy)
+
+If your company uses Zscaler as a proxy, you may need to add the Zscaler root certificate for the app to work properly.
+
+**How to get your Zscaler certificate:**
+
+1. Open your browser and navigate to `http://zscaler.net/`
+2. You should see a message about the Zscaler certificate
+3. Download the "Zscaler Root Certificate" (usually a `.crt` or `.pem` file)
+4. Save it to the project root directory as `zscaler_root.pem`
+
+**Alternatively, if you have the certificate elsewhere:**
+- Copy your Zscaler certificate to the project root
+- Rename it to `zscaler_root.pem`
+
+**The app automatically detects this file** - no additional configuration needed. If `zscaler_root.pem` exists in the project root, all API calls (OpenAI, HuggingFace, MLX model downloads) will use it for SSL verification.
 
 ## Transcription Backend Options
 

@@ -129,11 +129,36 @@ class MLXWhisperClient:
 
             logger.info(f"🎙️ TRANSCRIPTION: Using LOCAL model - MLX Whisper ({self.model_size})")
 
-            # Transcribe with language auto-detection
-            result = self.mlx_whisper.transcribe(
-                audio_file_path,
-                path_or_hf_repo=self.model_map.get(self.model_size, "mlx-community/whisper-large-v3-mlx")
-            )
+            # Ensure SSL certificates are configured for HuggingFace API calls (even for cached models, MLX checks metadata)
+            ssl_cert_file = os.getenv('SSL_CERT_FILE')
+            requests_ca_bundle = os.getenv('REQUESTS_CA_BUNDLE')
+
+            old_ssl_cert = os.environ.get('SSL_CERT_FILE')
+            old_ca_bundle = os.environ.get('REQUESTS_CA_BUNDLE')
+
+            try:
+                # Set SSL certs if available
+                if ssl_cert_file and os.path.exists(ssl_cert_file):
+                    os.environ['SSL_CERT_FILE'] = ssl_cert_file
+                    os.environ['REQUESTS_CA_BUNDLE'] = ssl_cert_file
+                    logger.debug(f"Using SSL cert for HuggingFace: {ssl_cert_file}")
+
+                # Transcribe with language auto-detection
+                result = self.mlx_whisper.transcribe(
+                    audio_file_path,
+                    path_or_hf_repo=self.model_map.get(self.model_size, "mlx-community/whisper-large-v3-mlx")
+                )
+            finally:
+                # Restore original environment variables
+                if old_ssl_cert is None:
+                    os.environ.pop('SSL_CERT_FILE', None)
+                else:
+                    os.environ['SSL_CERT_FILE'] = old_ssl_cert
+
+                if old_ca_bundle is None:
+                    os.environ.pop('REQUESTS_CA_BUNDLE', None)
+                else:
+                    os.environ['REQUESTS_CA_BUNDLE'] = old_ca_bundle
 
             # Extract transcribed text
             text = result.get("text", "").strip()
