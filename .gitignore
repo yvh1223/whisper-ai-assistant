@@ -1,9 +1,12 @@
 build
+.vscode/
 dist
-.env
+.env*
 __pycache__
 .vscode/launch.json
 whisper_dictation.log
 *.log
 archive/
 venv/
+*_root.pem
+zscaler*.pem

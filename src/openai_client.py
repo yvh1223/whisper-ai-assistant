@@ -38,8 +38,8 @@ class OpenAIClient:
                         limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
                     )
                 else:
-                    # Use system's CA bundle for SSL verification (includes Zscaler certs)
-                    ssl_cert_path = ssl.get_default_verify_paths().cafile
+                    # Try to find the best CA bundle for SSL verification (handles Zscaler)
+                    ssl_cert_path = self._get_ssl_cert_path()
                     http_client = httpx.Client(
                         verify=ssl_cert_path,
                         timeout=30.0,
@@ -58,7 +58,7 @@ class OpenAIClient:
                 logger.info(f"  - Whisper mode: Auto-detect language → Transcribe → Auto-translate to English")
                 logger.info(f"  - TTS model: {self.tts_model}")
                 if not disable_ssl:
-                    ssl_cert_path = ssl.get_default_verify_paths().cafile
+                    ssl_cert_path = self._get_ssl_cert_path()
                     logger.info(f"  - SSL certs: {ssl_cert_path}")
             else:
                 logger.warning("OPENAI_API_KEY not found in environment variables")
@@ -74,6 +74,39 @@ class OpenAIClient:
         """Check if OpenAI client is available and initialized"""
         return self.client is not None
 
+    def _get_ssl_cert_path(self):
+        """
+        Find the best SSL certificate path for the current environment.
+        Handles Zscaler and corporate proxies by trying multiple sources:
+        1. Environment variable overrides (SSL_CERT_FILE, REQUESTS_CA_BUNDLE)
+        2. System default CA bundle
+        3. certifi package fallback
+        """
+        import os
+
+        # Check for environment variable overrides first (used for Zscaler setup)
+        for env_var in ['SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE']:
+            cert_path = os.getenv(env_var)
+            if cert_path and os.path.exists(cert_path):
+                logger.debug(f"Using SSL cert from {env_var}: {cert_path}")
+                return cert_path
+
+        # Try system default CA bundle
+        system_ca = ssl.get_default_verify_paths().cafile
+        if system_ca and os.path.exists(system_ca):
+            logger.debug(f"Using system SSL cert: {system_ca}")
+            return system_ca
+
+        # Fall back to certifi (has Mozilla's CA bundle)
+        try:
+            import certifi
+            cert_path = certifi.where()
+            logger.debug(f"Using certifi SSL cert: {cert_path}")
+            return cert_path
+        except ImportError:
+            logger.warning("certifi not available, using system defaults")
+            return True  # Let httpx use its default
+
     def enhance_text(self, transcribed_text, selected_text):
         """
         Send transcribed instruction and selected text to OpenAI.
@@ -81,6 +114,8 @@ class OpenAIClient:
         """
         if not self.client:
             raise Exception("OpenAI client not initialized")
+
+        logger.info(f"📝 TEXT ENHANCEMENT: Using CLOUD model - OpenAI {self.model}")
 
         # Construct the prompt for GPT
         prompt = f"""You are helping a user edit text based on voice commands. The user has selected some text and given a voice instruction for how to modify it.
@@ -122,6 +157,7 @@ Please modify the selected text according to the voice instruction. Return only 
             if response.choices and len(response.choices) > 0:
                 enhanced_text = response.choices[0].message.content.strip()
                 logger.debug(f"OpenAI response: {enhanced_text}")
+                logger.info(f"✓ Text enhancement successful")
                 return enhanced_text
             else:
                 raise Exception("No content in OpenAI response")
@@ -258,6 +294,8 @@ Please modify the selected text according to the voice instruction. Return only 
             raise Exception("OpenAI client not initialized")
 
         try:
+            logger.info(f"🎙️ TRANSCRIPTION: Using CLOUD model - OpenAI {self.whisper_model}")
+
             with open(audio_file_path, 'rb') as audio_file:
                 # Use transcriptions endpoint
                 kwargs = {
@@ -271,6 +309,7 @@ Please modify the selected text according to the voice instruction. Return only 
                 response = self.client.audio.transcriptions.create(**kwargs)
 
             transcribed = response.strip() if isinstance(response, str) else response.text.strip()
+            logger.info(f"✓ OpenAI transcription successful: {transcribed}")
             logger.debug(f"OpenAI Whisper transcription: {transcribed}")
 
             # Check if text is English

@@ -12,25 +12,33 @@ from pynput import keyboard
 from pynput.keyboard import Key, Controller
 import faster_whisper
 import signal
+import warnings
 from AppKit import NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn
 from text_selection import TextSelection
 from openai_client import OpenAIClient
 from task_manager import TaskManager
 from recording_indicator import RecordingIndicator
 from logger_config import setup_logging
+from mlx_whisper_client import MLXWhisperClient
+
+# Suppress multiprocessing resource tracker warnings on shutdown
+warnings.filterwarnings("ignore", category=UserWarning, module="multiprocessing.resource_tracker")
 
 logger = setup_logging()
 
 # Set up a global flag for handling SIGINT
 exit_flag = False
+exit_event = threading.Event()
 
 def signal_handler(sig, frame):
     """Global signal handler for graceful shutdown"""
     global exit_flag
-    logger.info("Shutdown signal received, exiting gracefully...")
+    logger.info("\n--- Shutdown signal received (Ctrl+C) ---")
     exit_flag = True
-    # Try to force exit if the app doesn't respond quickly
-    threading.Timer(2.0, lambda: os._exit(0)).start()
+    exit_event.set()
+    # Force exit immediately - don't wait for cleanup
+    logger.info("Exiting...")
+    os._exit(0)
 
 # Set up graceful shutdown handling for interrupt and termination signals
 signal.signal(signal.SIGINT, signal_handler)
@@ -104,10 +112,24 @@ class WhisperDictationApp(rumps.App):
         self.indicator = RecordingIndicator()
         self.indicator.set_app_reference(self)
 
-        # Initialize Whisper model
+        # Initialize transcription backend (MLX, faster-whisper, or OpenAI)
         self.model = None
-        self.load_model_thread = threading.Thread(target=self.load_model)
-        self.load_model_thread.start()
+        self.mlx_client = None
+        self.use_mlx_whisper = os.getenv('USE_MLX_WHISPER', 'false').lower() == 'true'
+
+        if self.use_mlx_whisper:
+            # Load MLX Whisper model
+            self.load_mlx_thread = threading.Thread(target=self.load_mlx_model)
+            self.load_mlx_thread.start()
+        elif not self.openai_client.use_openai_whisper:
+            # Load local faster-whisper model
+            self.load_model_thread = threading.Thread(target=self.load_model)
+            self.load_model_thread.start()
+        else:
+            # Using cloud API - model not needed
+            self.title = "🎙️"
+            self.status_item.title = "Status: Ready (Cloud API)"
+            logger.info("Using OpenAI Whisper API - skipping local model load")
         
         # Audio recording parameters
         self.format = pyaudio.paInt16
@@ -194,19 +216,62 @@ class WhisperDictationApp(rumps.App):
     def cleanup(self):
         """Clean up resources before exiting"""
         logger.info("Cleaning up resources...")
-        # Stop recording if in progress
-        if self.recording:
-            self.recording = False
-            if hasattr(self, 'recording_thread') and self.recording_thread.is_alive():
-                self.recording_thread.join(timeout=1.0)
-        
-        # Close PyAudio
-        if hasattr(self, 'audio'):
-            try:
-                self.audio.terminate()
-            except:
-                pass
+        try:
+            # Stop recording if in progress
+            if self.recording:
+                self.recording = False
+                if hasattr(self, 'recording_thread') and self.recording_thread.is_alive():
+                    try:
+                        self.recording_thread.join(timeout=1.0)
+                    except:
+                        pass
+
+            # Stop any playing audio
+            if hasattr(self, 'current_audio_process') and self.current_audio_process:
+                try:
+                    if self.current_audio_process.poll() is None:
+                        self.current_audio_process.terminate()
+                        self.current_audio_process.wait(timeout=1.0)
+                except:
+                    pass
+
+            # Close recording indicator if active
+            if hasattr(self, 'recording_indicator'):
+                try:
+                    if hasattr(self.recording_indicator, 'stop'):
+                        self.recording_indicator.stop()
+                except:
+                    pass
+
+            # Close PyAudio properly
+            if hasattr(self, 'audio'):
+                try:
+                    self.audio.terminate()
+                except:
+                    pass
+
+            logger.info("Resources cleaned up successfully")
+        except Exception as e:
+            logger.warning(f"Error during cleanup: {e}")
     
+    def load_mlx_model(self):
+        """Load MLX Whisper model (optimized for Apple Silicon)"""
+        self.title = "🎙️ (Loading MLX...)"
+        self.status_item.title = "Status: Loading MLX Whisper model..."
+        try:
+            model_size = os.getenv('MLX_WHISPER_MODEL', 'large-v3')
+            self.mlx_client = MLXWhisperClient(model_size=model_size)
+            self.title = "🎙️"
+            self.status_item.title = "Status: Ready (MLX Local)"
+            logger.info(f"MLX Whisper model ({model_size}) loaded successfully!")
+        except Exception as e:
+            self.title = "🎙️ (Error)"
+            self.status_item.title = "Status: Error loading MLX model"
+            logger.error(f"Error loading MLX Whisper model: {e}")
+            # Fall back to faster-whisper
+            logger.info("Falling back to faster-whisper...")
+            self.load_model()
+
     def load_model(self):
         self.title = "🎙️ (Loading...)"
         self.status_item.title = "Status: Loading Whisper model..."
@@ -219,7 +284,7 @@ class WhisperDictationApp(rumps.App):
             self.title = "🎙️ (Error)"
             self.status_item.title = "Status: Error loading model"
             logger.error(f"Error loading model: {e}")
-    
+
     def setup_microphone_menu(self):
         """Setup the microphone selection submenu"""
         self.mic_submenu = rumps.MenuItem("Microphone")
@@ -573,10 +638,17 @@ class WhisperDictationApp(rumps.App):
         raise Exception(error_msg)
 
     def start_recording(self):
-        if not hasattr(self, 'model') or self.model is None:
-            logger.warning("Model not loaded. Please wait for the model to finish loading.")
-            self.status_item.title = "Status: Waiting for model to load"
-            return
+        # Check if model is needed and loaded
+        if self.use_mlx_whisper:
+            if self.mlx_client is None:
+                logger.warning("MLX model not loaded. Please wait for the model to finish loading.")
+                self.status_item.title = "Status: Waiting for MLX model to load"
+                return
+        elif not self.openai_client.use_openai_whisper:
+            if not hasattr(self, 'model') or self.model is None:
+                logger.warning("Model not loaded. Please wait for the model to finish loading.")
+                self.status_item.title = "Status: Waiting for model to load"
+                return
 
         self.update_activity()  # Update activity timestamp
         self.frames = []
@@ -692,16 +764,19 @@ class WhisperDictationApp(rumps.App):
 
         logger.debug("Audio saved to temporary file. Transcribing...")
 
-        # Transcribe with Whisper (OpenAI API or local model)
-        # Both modes auto-detect language and translate to English
+        # Transcribe with Whisper (MLX, faster-whisper, or OpenAI API)
+        # All modes auto-detect language and translate to English
         try:
-            # Check if we should use OpenAI Whisper API
-            if self.openai_client.is_available() and self.openai_client.use_openai_whisper:
+            # Check transcription backend priority
+            if self.use_mlx_whisper and self.mlx_client:
+                logger.debug("Using MLX Whisper (auto-detect → English)...")
+                text = self.mlx_client.transcribe_audio(temp_filename)
+            elif self.openai_client.is_available() and self.openai_client.use_openai_whisper:
                 logger.debug("Using OpenAI Whisper API (auto-detect → English)...")
                 text = self.openai_client.transcribe_audio(temp_filename)
             else:
-                # Use local Whisper model with translation to English
-                logger.debug("Using local Whisper model (auto-detect → English)...")
+                # Use local faster-whisper model with translation to English
+                logger.debug("Using faster-whisper model (auto-detect → English)...")
                 try:
                     # task="translate" auto-detects language and translates to English
                     segments, _ = self.model.transcribe(temp_filename, beam_size=5, task="translate")
@@ -836,16 +911,37 @@ class WhisperDictationApp(rumps.App):
             os.unlink(temp_filename)
     
     def insert_text(self, text):
-        # Type text at cursor position without altering the clipboard
+        # Paste text using clipboard + Cmd+V (works in any focused app)
         logger.info(f"Inserting text at cursor: {text[:50]}...")
         try:
-            # Minimal delay to ensure focus is ready
-            time.sleep(0.01)
-            self.keyboard_controller.type(text)
+            import pyperclip
+
+            # Save current clipboard
+            original_clipboard = pyperclip.paste()
+
+            # Copy text to clipboard
+            pyperclip.copy(text)
+
+            # Small delay to ensure clipboard is updated
+            time.sleep(0.1)
+
+            # Send Cmd+V to paste using pynput (requires accessibility permissions)
+            self.keyboard_controller.press(Key.cmd)
+            time.sleep(0.05)
+            self.keyboard_controller.press('v')
+            time.sleep(0.05)
+            self.keyboard_controller.release('v')
+            time.sleep(0.05)
+            self.keyboard_controller.release(Key.cmd)
+
+            # Restore original clipboard after a delay
+            time.sleep(0.1)
+            pyperclip.copy(original_clipboard)
+
             logger.info("✓ Text inserted successfully")
         except Exception as e:
             logger.error(f"Error inserting text: {e}")
-            # Fallback: copy to clipboard
+            # Final fallback: just copy to clipboard
             logger.info("Falling back to clipboard copy")
             import pyperclip
             pyperclip.copy(text)

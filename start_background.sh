@@ -18,6 +18,14 @@ echo ""
 echo "✓ Activating virtual environment..."
 source venv/bin/activate
 
+# Check for --use-local flag to enable MLX Whisper
+if [[ "$1" == "--use-local" ]]; then
+    echo "✓ MLX Whisper mode enabled (local transcription)"
+    export USE_MLX_WHISPER=true
+    export MLX_WHISPER_MODEL="${2:-large-v3}"
+    echo "  Model: ${MLX_WHISPER_MODEL}"
+fi
+
 echo "✓ Starting app with menu bar icon 🎙️"
 echo ""
 echo "╔════════════════════════════════════════════════════════════════╗"

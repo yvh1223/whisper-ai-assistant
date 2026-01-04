@@ -17,5 +17,20 @@ cd "$(dirname "$0")"
 # Activate virtual environment
 source venv/bin/activate
 
+# Check for --use-local flag to enable MLX Whisper
+if [[ "$1" == "--use-local" ]]; then
+    echo ""
+    echo "MLX Whisper mode enabled (local transcription)"
+    export USE_MLX_WHISPER=true
+
+    # Optionally set model size
+    # Options: tiny (39MB), base (140MB), small (244MB), medium (769MB), large-v3 (2.9GB)
+    # Default: large-v3
+    # Usage: ./run.sh --use-local small
+    export MLX_WHISPER_MODEL="${2:-large-v3}"
+    echo "Using model: ${MLX_WHISPER_MODEL}"
+    echo "First run will download model to ~/.cache/huggingface/hub/"
+fi
+
 # Run with venv Python
 python src/main.py

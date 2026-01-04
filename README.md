@@ -81,6 +81,85 @@ cp .env.example .env
 ./run.sh
 ```
 
+## Transcription Backend Options
+
+Choose how the app transcribes your voice:
+
+| Backend | Speed | Cost | Setup | Best For |
+|---------|-------|------|-------|----------|
+| **MLX Whisper** ⭐ | 8-12x faster | FREE | `./run.sh --use-local` | Apple Silicon Macs (M1/M2/M3+) |
+| **Faster-Whisper** | 4x faster | FREE | `./run.sh` (default) | Any Mac with more CPU capacity |
+| **OpenAI Whisper API** | Fast | $0.003/min | Set `USE_OPENAI_WHISPER=true` in .env | Maximum accuracy, cloud-based |
+
+### MLX Whisper Setup (Recommended for Apple Silicon)
+
+MLX Whisper is **8-12x faster** than OpenAI's Whisper and runs entirely on your Mac.
+
+**First-time setup:**
+```bash
+# Install MLX and dependencies
+pip install mlx-whisper
+
+# Run app with MLX Whisper
+./run.sh --use-local
+
+# Or set as default in .env:
+# USE_MLX_WHISPER=true
+# MLX_WHISPER_MODEL=large-v3
+```
+
+**How it works:**
+1. First run downloads the model (~1-3 GB depending on size)
+2. Model is cached in `~/.cache/huggingface/hub/`
+3. Subsequent runs use cached model (no download)
+4. Completely local - no API calls, no internet needed
+
+**Model sizes:**
+- `tiny` (39 MB) - fastest, lowest accuracy
+- `base` (140 MB) - good balance
+- `small` (244 MB) - **recommended** for most users
+- `medium` (769 MB) - high accuracy
+- `large-v3` (2.9 GB) - **highest accuracy** (default)
+
+**To use a different model:**
+```bash
+./run.sh --use-local small       # Fast & accurate (244MB)
+./run.sh --use-local medium      # High accuracy (769MB)
+./run.sh --use-local large-v3    # Highest accuracy (2.9GB, default)
+
+# Or set in .env:
+# MLX_WHISPER_MODEL=small
+```
+
+### Pre-download Models (Optional)
+
+To avoid delays on first run, pre-download models:
+
+```bash
+# Download speech-to-text models (small, medium, large-v3)
+./setup_mlx_models.sh
+
+# Or download models and Urdu translation
+./setup_mlx_models.sh --translation ur
+
+# This saves time later by caching models in ~/.cache/huggingface/hub/
+```
+
+Models are cached automatically after first use, so this is only needed if you want to avoid the wait during initial transcription.
+
+**Translation (Optional):**
+- Translation requires explicitly passing `--translation [language]` to the setup script
+- Supported languages: Hindi (`hi`), Urdu (`ur`), Chinese (`zh`)
+- Once downloaded, recorded audio in these languages will be automatically transcribed and translated to English
+- Examples:
+  ```bash
+  ./setup_mlx_models.sh --translation ur          # Urdu only
+  ./setup_mlx_models.sh --translation hi,ur       # Hindi + Urdu
+  ./setup_mlx_models.sh --translation hi,ur,zh    # All three languages
+  ```
+
+---
+
 ## Usage
 
 ### Basic Dictation (Main Feature)
