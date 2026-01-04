@@ -2,6 +2,7 @@
 # ABOUTME: Start Whisper Dictation - Keep this terminal open!
 
 cd "$(dirname "$0")"
+SCRIPT_DIR="$(pwd)"
 
 # Check if already running
 if pgrep -f "python.*src/main.py" > /dev/null; then
@@ -17,6 +18,12 @@ echo "╚═══════════════════════�
 echo ""
 echo "✓ Activating virtual environment..."
 source venv/bin/activate
+
+# Check for Zscaler certificate and set absolute path for SSL verification
+if [ -f "$SCRIPT_DIR/zscaler_root.pem" ]; then
+    export SSL_CERT_FILE="$SCRIPT_DIR/zscaler_root.pem"
+    export REQUESTS_CA_BUNDLE="$SCRIPT_DIR/zscaler_root.pem"
+fi
 
 # Check for --use-local flag to enable MLX Whisper
 if [[ "$1" == "--use-local" ]]; then

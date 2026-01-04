@@ -38,7 +38,6 @@ class MLXWhisperClient:
     def _load_model(self):
         """Load MLX Whisper model from Hugging Face"""
         try:
-            import mlx_whisper
             import os
 
             model_name = self.model_map.get(self.model_size, "mlx-community/whisper-large-v3-mlx")
@@ -49,8 +48,15 @@ class MLXWhisperClient:
             os.environ['HF_HOME'] = os.path.expanduser('~/.cache/huggingface')
             os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
 
-            # Set SSL certs for Zscaler compatibility
+            # CRITICAL: Set offline mode BEFORE importing mlx_whisper to prevent any network calls
+            # This must be set before huggingface_hub initializes its HTTP client
+            os.environ['HF_HUB_OFFLINE'] = '1'
+
+            # Set SSL certs for Zscaler compatibility (for initial download if needed)
             self._setup_ssl_for_huggingface()
+
+            # Import mlx_whisper AFTER setting offline mode
+            import mlx_whisper
 
             # Check if model is already cached
             model_repo = self.model_map.get(self.model_size, "mlx-community/whisper-large-v3-mlx")
@@ -79,16 +85,31 @@ class MLXWhisperClient:
         import os
         import ssl
 
-        # Check for Zscaler certificate in .env or use system defaults
+        # Check for Zscaler certificate in environment or use system defaults
         ssl_cert_file = os.getenv('SSL_CERT_FILE')
         requests_ca_bundle = os.getenv('REQUESTS_CA_BUNDLE')
 
         if ssl_cert_file:
-            os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
-            logger.debug(f"Using SSL_CERT_FILE for HuggingFace: {ssl_cert_file}")
+            # Convert relative paths to absolute
+            if not os.path.isabs(ssl_cert_file):
+                ssl_cert_file = os.path.abspath(ssl_cert_file)
+
+            if os.path.exists(ssl_cert_file):
+                os.environ['SSL_CERT_FILE'] = ssl_cert_file
+                os.environ['REQUESTS_CA_BUNDLE'] = ssl_cert_file
+                logger.debug(f"Using SSL_CERT_FILE for HuggingFace: {ssl_cert_file}")
+            else:
+                logger.debug(f"SSL_CERT_FILE not found: {ssl_cert_file}")
         elif requests_ca_bundle:
-            os.environ['REQUESTS_CA_BUNDLE'] = requests_ca_bundle
-            logger.debug(f"Using REQUESTS_CA_BUNDLE for HuggingFace: {requests_ca_bundle}")
+            # Convert relative paths to absolute
+            if not os.path.isabs(requests_ca_bundle):
+                requests_ca_bundle = os.path.abspath(requests_ca_bundle)
+
+            if os.path.exists(requests_ca_bundle):
+                os.environ['REQUESTS_CA_BUNDLE'] = requests_ca_bundle
+                logger.debug(f"Using REQUESTS_CA_BUNDLE for HuggingFace: {requests_ca_bundle}")
+            else:
+                logger.debug(f"REQUESTS_CA_BUNDLE not found: {requests_ca_bundle}")
         else:
             # Use system default
             try:
@@ -129,36 +150,30 @@ class MLXWhisperClient:
 
             logger.info(f"🎙️ TRANSCRIPTION: Using LOCAL model - MLX Whisper ({self.model_size})")
 
-            # Ensure SSL certificates are configured for HuggingFace API calls (even for cached models, MLX checks metadata)
-            ssl_cert_file = os.getenv('SSL_CERT_FILE')
-            requests_ca_bundle = os.getenv('REQUESTS_CA_BUNDLE')
+            # Use local cache path directly instead of HF repo name to avoid network calls
+            # mlx-whisper doesn't respect HF_HUB_OFFLINE when using repo names
+            cache_dir = os.path.expanduser('~/.cache/huggingface/hub')
+            model_repo = self.model_map.get(self.model_size, "mlx-community/whisper-large-v3-mlx")
+            cache_model_dir = os.path.join(cache_dir, f"models--{model_repo.replace('/', '--')}")
 
-            old_ssl_cert = os.environ.get('SSL_CERT_FILE')
-            old_ca_bundle = os.environ.get('REQUESTS_CA_BUNDLE')
-
-            try:
-                # Set SSL certs if available
-                if ssl_cert_file and os.path.exists(ssl_cert_file):
-                    os.environ['SSL_CERT_FILE'] = ssl_cert_file
-                    os.environ['REQUESTS_CA_BUNDLE'] = ssl_cert_file
-                    logger.debug(f"Using SSL cert for HuggingFace: {ssl_cert_file}")
-
-                # Transcribe with language auto-detection
-                result = self.mlx_whisper.transcribe(
-                    audio_file_path,
-                    path_or_hf_repo=self.model_map.get(self.model_size, "mlx-community/whisper-large-v3-mlx")
-                )
-            finally:
-                # Restore original environment variables
-                if old_ssl_cert is None:
-                    os.environ.pop('SSL_CERT_FILE', None)
+            # Find the snapshot directory (HF cache structure: models--*/snapshots/<hash>/)
+            snapshots_dir = os.path.join(cache_model_dir, "snapshots")
+            if os.path.exists(snapshots_dir):
+                # Get the first (and usually only) snapshot hash
+                snapshot_dirs = os.listdir(snapshots_dir)
+                if snapshot_dirs:
+                    cache_path = os.path.join(snapshots_dir, snapshot_dirs[0])
+                    logger.debug(f"Using cached model at: {cache_path}")
                 else:
-                    os.environ['SSL_CERT_FILE'] = old_ssl_cert
+                    raise FileNotFoundError(f"No snapshots found in {snapshots_dir}")
+            else:
+                raise FileNotFoundError(f"Model not cached. Run: ./setup_mlx_models.sh")
 
-                if old_ca_bundle is None:
-                    os.environ.pop('REQUESTS_CA_BUNDLE', None)
-                else:
-                    os.environ['REQUESTS_CA_BUNDLE'] = old_ca_bundle
+            # Transcribe using local cache path (prevents any API calls)
+            result = self.mlx_whisper.transcribe(
+                audio_file_path,
+                path_or_hf_repo=cache_path
+            )
 
             # Extract transcribed text
             text = result.get("text", "").strip()

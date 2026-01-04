@@ -13,9 +13,16 @@ echo "Press Ctrl+C to quit the app."
 
 # Run the dictation app
 cd "$(dirname "$0")"
+SCRIPT_DIR="$(pwd)"
 
 # Activate virtual environment
 source venv/bin/activate
+
+# Check for Zscaler certificate and set absolute path for SSL verification
+if [ -f "$SCRIPT_DIR/zscaler_root.pem" ]; then
+    export SSL_CERT_FILE="$SCRIPT_DIR/zscaler_root.pem"
+    export REQUESTS_CA_BUNDLE="$SCRIPT_DIR/zscaler_root.pem"
+fi
 
 # Check for --use-local flag to enable MLX Whisper
 if [[ "$1" == "--use-local" ]]; then
