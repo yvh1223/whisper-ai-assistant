@@ -20,9 +20,11 @@ from task_manager import TaskManager
 from recording_indicator import RecordingIndicator
 from logger_config import setup_logging
 from mlx_whisper_client import MLXWhisperClient
+from tts_speed_controller import TTSSpeedController
 
 # Suppress multiprocessing resource tracker warnings on shutdown
-warnings.filterwarnings("ignore", category=UserWarning, module="multiprocessing.resource_tracker")
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*resource_tracker.*")
 
 logger = setup_logging()
 
@@ -140,17 +142,21 @@ class WhisperDictationApp(rumps.App):
         # Hotkey configuration - we'll listen for globe/fn key (vk=63)
         self.trigger_key = 63  # Key code for globe/fn key
 
-        # Right Shift trigger state (optimistic recording with discard threshold)
+        # Right Shift trigger state for TTS on/off toggle
         self.shift_press_time = None
         self.shift_held = False
-        self.shift_threshold = 0.75  # Minimum hold time in seconds
+
+        # TTS speed controller - read speed from environment or use default
+        tts_speed = float(os.getenv('TTS_SPEED', '1.0'))
+        self.tts_controller = TTSSpeedController(tts_speed=tts_speed)
 
         self.setup_global_monitor()
         
         # Show initial message
         logger.info("Started WhisperDictation app. Look for 🎙️ in your menu bar.")
         logger.info("Press and hold the Globe/Fn key (vk=63) to record. Release to transcribe.")
-        logger.info("Alternatively, hold Right Shift to record (release after 0.75s to process, before to discard).")
+        logger.info("Right Shift: Select text → Press once to play → Press again to stop")
+        logger.info("  - Speed preset at startup (use --tts-speed flag: 1, 1.25, 1.5, 2)")
         logger.info("Multi-language support: Speak in any language (Hindi, English, etc.) → Output in English")
         logger.info("Press Ctrl+C to quit the application.")
         logger.info("You may need to grant this app accessibility permissions in System Preferences.")
@@ -348,7 +354,86 @@ class WhisperDictationApp(rumps.App):
         self.title = "🎙️"
         self.status_item.title = "Status: Recording discarded (too short)"
         logger.info("Recording discarded - held for less than threshold")
-    
+
+    def handle_shift_tts(self):
+        """
+        Handle Right Shift for text-to-speech:
+        1. If text is selected and not currently playing → get selected text and play TTS
+        2. If already playing → increase speed by 0.25x
+        """
+        logger.debug(f"[TTS-START] handle_shift_tts called - is_playing={self.tts_controller.is_playing}")
+
+        # Check if already playing - if so, increase speed
+        if self.tts_controller.is_playing:
+            logger.info("[TTS-SPEED] Right Shift pressed while reading - increasing speed")
+            logger.debug("[TTS-SPEED] Calling increase_speed()")
+            speed_result = self.tts_controller.increase_speed()
+            logger.debug(f"[TTS-SPEED] increase_speed result: {speed_result}")
+            if speed_result:
+                status = self.tts_controller.get_status()
+                logger.info(f"✓ TTS speed increased to {status['current_speed']}x")
+            else:
+                logger.debug("[TTS-SPEED] Speed control disabled for now")
+            return
+
+        # Try to get selected text
+        logger.debug("[TTS-SELECT] Attempting to get selected text...")
+        text_selection = TextSelection()
+        selected_text = text_selection.get_selected_text()
+
+        logger.debug(f"[TTS-SELECT] Got text: {repr(selected_text[:30] if selected_text else 'None')}...")
+
+        if not selected_text or selected_text.strip() == "":
+            logger.info("[TTS-FALLBACK] No text selected - falling back to voice recording")
+            # Fall back to recording behavior
+            self.shift_press_time = time.time()
+            self.shift_held = True
+            logger.debug("[TTS-FALLBACK] Starting recording")
+            self.start_recording()
+            logger.debug("[TTS-FALLBACK] Recording started")
+            return
+
+        # We have selected text - generate and play TTS
+        text_preview = selected_text[:50] + "..." if len(selected_text) > 50 else selected_text
+        logger.info(f"[TTS-GEN] Selected text ({len(selected_text)} chars): {text_preview}")
+
+        try:
+            # Generate TTS audio
+            logger.debug("[TTS-GEN] Calling openai_client.text_to_speech()...")
+            audio_data = self.openai_client.text_to_speech(selected_text)
+            logger.debug(f"[TTS-GEN] Got audio data: {len(audio_data)} bytes")
+
+            # Save to temporary file
+            logger.debug("[TTS-GEN] Writing audio to temp file...")
+            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
+                temp_file.write(audio_data)
+                temp_audio_path = temp_file.name
+
+            logger.debug(f"[TTS-GEN] Temp file written: {temp_audio_path}")
+
+            # Play with TTS controller
+            logger.info("[TTS-PLAY] Starting TTS playback...")
+            logger.debug("[TTS-PLAY] Calling tts_controller.play_with_speed()")
+            playback_result = self.tts_controller.play_with_speed(temp_audio_path, speed=1.0)
+            logger.debug(f"[TTS-PLAY] play_with_speed returned: {playback_result}")
+
+            if not playback_result:
+                logger.error("[TTS-ERROR] Failed to start TTS playback")
+                raise Exception("TTS playback failed to start")
+
+            logger.debug("[TTS-PLAY] Playback started successfully")
+
+        except Exception as e:
+            logger.error(f"[TTS-ERROR] Error with TTS: {e}")
+            import traceback
+            logger.debug(f"[TTS-ERROR] Traceback: {traceback.format_exc()}")
+            logger.info("[TTS-FALLBACK] Falling back to voice recording")
+            self.shift_press_time = time.time()
+            self.shift_held = True
+            self.start_recording()
+
+        logger.debug("[TTS-END] handle_shift_tts completed")
+
     def monitor_keys(self):
         # Track state of key 63 (Globe/Fn key)
         self.is_recording_with_key63 = False
@@ -366,13 +451,15 @@ class WhisperDictationApp(rumps.App):
                 if hasattr(key, 'vk') and key.vk == self.trigger_key:
                     logger.debug(f"Target key (vk={key.vk}) pressed")
 
-                # Right Shift handling - start recording immediately (optimistic)
+                # Right Shift handling - toggle TTS on/off
                 if key == Key.shift_r:
-                    if not self.recording:
-                        logger.info("Right Shift pressed - starting recording immediately")
-                        self.shift_press_time = time.time()
-                        self.shift_held = True
-                        self.start_recording()
+                    if self.tts_controller.is_playing:
+                        logger.info("⏹ Right Shift pressed - stopping TTS playback")
+                        self.tts_controller.stop()
+                    else:
+                        logger.info("▶ Right Shift pressed - checking for selected text")
+                        self.handle_shift_tts()
+                    logger.debug("Right Shift handling completed")
             except UnicodeDecodeError:
                 # Ignore unicode errors from special characters
                 pass
@@ -393,17 +480,6 @@ class WhisperDictationApp(rumps.App):
                             self.is_recording_with_key63 = False
                             self.stop_recording()
 
-                # Right Shift handling - check duration and discard or process
-                if key == Key.shift_r and self.shift_held:
-                    hold_duration = time.time() - self.shift_press_time
-                    self.shift_held = False
-
-                    if hold_duration < self.shift_threshold:
-                        logger.info(f"Right Shift released after {hold_duration:.2f}s - discarding (< {self.shift_threshold}s)")
-                        self.discard_recording()
-                    else:
-                        logger.info(f"Right Shift released after {hold_duration:.2f}s - processing")
-                        self.stop_recording()
             except UnicodeDecodeError:
                 # Ignore unicode errors from special characters
                 pass
