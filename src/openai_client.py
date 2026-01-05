@@ -323,31 +323,61 @@ Please modify the selected text according to the voice instruction. Return only 
             logger.error(f"Error transcribing audio with OpenAI: {e}")
             raise
 
-    def text_to_speech(self, text, output_path=None):
+    def text_to_speech(self, text, output_path=None, speed=1.0):
         """
-        Convert text to speech using OpenAI TTS.
+        Convert text to speech using OpenAI TTS with fallback to macOS native 'say' command.
         If output_path is provided, saves to file. Otherwise returns audio data.
-        """
-        if not self.client:
-            raise Exception("OpenAI client not initialized")
 
+        Args:
+            text: Text to convert to speech
+            output_path: Optional file path to save audio
+            speed: Playback speed multiplier (1.0 = normal, 1.2 = 20% faster, etc.)
+        """
+        # Try OpenAI TTS first if client is available
+        # Note: OpenAI TTS doesn't support speed control via API, so we ignore speed for OpenAI
+        if self.client:
+            try:
+                response = self.client.audio.speech.create(
+                    model=self.tts_model,
+                    voice=self.tts_voice,
+                    input=text
+                )
+
+                if output_path:
+                    response.stream_to_file(output_path)
+                    logger.info(f"TTS audio saved to: {output_path}")
+                    return output_path
+                else:
+                    return response.content
+
+            except Exception as e:
+                logger.warning(f"OpenAI TTS failed ({e}), falling back to macOS native TTS...")
+
+        # Fallback to macOS native 'say' command (local, FREE)
         try:
-            response = self.client.audio.speech.create(
-                model=self.tts_model,
-                voice=self.tts_voice,
-                input=text
-            )
+            import subprocess
+
+            # Calculate words per minute based on speed multiplier
+            # Default macOS say rate is ~175 wpm
+            base_rate = 175
+            rate = int(base_rate * speed)
+
+            logger.info(f"🔊 TTS: Using LOCAL macOS native 'say' command at {speed}x speed ({rate} wpm)")
 
             if output_path:
-                response.stream_to_file(output_path)
-                logger.info(f"TTS audio saved to: {output_path}")
-                return output_path
+                # Save to AIFF file using macOS say command with speed
+                subprocess.run(['say', '-r', str(rate), '-o', output_path.replace('.mp3', '.aiff'), text], check=True)
+                logger.info(f"Local TTS audio saved to: {output_path.replace('.mp3', '.aiff')}")
+                return output_path.replace('.mp3', '.aiff')
             else:
-                return response.content
+                # Just speak directly (no file output) with speed control
+                subprocess.run(['say', '-r', str(rate), text], check=True)
+                logger.info(f"✓ Local TTS playback complete at {speed}x speed")
+                return None
 
         except Exception as e:
-            logger.error(f"Error generating speech with OpenAI: {e}")
-            raise
+            logger.error(f"Error with local macOS TTS: {e}")
+            raise Exception("Both OpenAI TTS and macOS native TTS failed")
 
     def parse_task_command(self, text, current_date):
         """

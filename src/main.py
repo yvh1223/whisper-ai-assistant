@@ -75,8 +75,19 @@ class WhisperDictationApp(rumps.App):
         self.mic_menu_mapping = {}  # Maps menu title to device index
         self.setup_microphone_menu()
 
-        # Add TTS menu items
-        self.tts_menu_item = rumps.MenuItem("Read Selected Text Aloud")
+        # Add TTS menu items with speed submenu
+        self.tts_speed = 1.0  # Default speed (1.0x)
+        self.tts_submenu = rumps.MenuItem("Read Selected Text Aloud")
+        self.tts_1x = rumps.MenuItem("🔊 1.0x (Normal)", callback=lambda _: self.read_selected_text_with_speed(1.0))
+        self.tts_1_2x = rumps.MenuItem("1.2x (Faster)", callback=lambda _: self.read_selected_text_with_speed(1.2))
+        self.tts_1_5x = rumps.MenuItem("1.5x (Much Faster)", callback=lambda _: self.read_selected_text_with_speed(1.5))
+        self.tts_2x = rumps.MenuItem("2.0x (Very Fast)", callback=lambda _: self.read_selected_text_with_speed(2.0))
+
+        self.tts_submenu.add(self.tts_1x)
+        self.tts_submenu.add(self.tts_1_2x)
+        self.tts_submenu.add(self.tts_1_5x)
+        self.tts_submenu.add(self.tts_2x)
+
         self.stop_tts_menu_item = rumps.MenuItem("Stop Reading")
         self.stop_tts_menu_item.set_callback(self.stop_tts)
 
@@ -101,7 +112,7 @@ class WhisperDictationApp(rumps.App):
 
         self.menu = [
             self.recording_menu_item,
-            self.tts_menu_item,
+            self.tts_submenu,
             self.stop_tts_menu_item,
             self.task_submenu,
             None,
@@ -439,12 +450,19 @@ class WhisperDictationApp(rumps.App):
         """Update last activity timestamp"""
         self.last_activity_time = time.time()
 
-    @rumps.clicked("Read Selected Text Aloud")
-    def read_selected_text(self, sender):
-        """Read selected text using TTS"""
+    def read_selected_text_with_speed(self, speed):
+        """Read selected text using TTS at specified speed"""
         self.update_activity()
+        self.tts_speed = speed
+
+        # Update menu item indicators
+        self.tts_1x.title = "🔊 1.0x (Normal)" if speed == 1.0 else "1.0x (Normal)"
+        self.tts_1_2x.title = "🔊 1.2x (Faster)" if speed == 1.2 else "1.2x (Faster)"
+        self.tts_1_5x.title = "🔊 1.5x (Much Faster)" if speed == 1.5 else "1.5x (Much Faster)"
+        self.tts_2x.title = "🔊 2.0x (Very Fast)" if speed == 2.0 else "2.0x (Very Fast)"
+
         # Run in background thread to avoid blocking UI
-        tts_thread = threading.Thread(target=self._read_selected_text_worker)
+        tts_thread = threading.Thread(target=self._read_selected_text_worker, args=(speed,))
         tts_thread.start()
 
     def stop_tts(self, sender=None):
@@ -468,7 +486,7 @@ class WhisperDictationApp(rumps.App):
         # Hide stop button
         self.stop_tts_menu_item.title = None
 
-    def _read_selected_text_worker(self):
+    def _read_selected_text_worker(self, speed=1.0):
         """Worker function to read selected text using TTS"""
         try:
             # Small delay to allow focus to return to the original app after clicking menu
@@ -493,34 +511,41 @@ class WhisperDictationApp(rumps.App):
                 selected_text = selected_text[:4000]
 
             char_count = len(selected_text)
-            logger.info(f"Reading aloud ({char_count} chars): {selected_text[:50]}...")
+            logger.info(f"Reading aloud at {speed}x speed ({char_count} chars): {selected_text[:50]}...")
             self.title = "🔊 (Reading...)"
-            self.status_item.title = "Status: Reading text aloud..."
+            self.status_item.title = f"Status: Reading at {speed}x speed..."
 
-            # Use OpenAI TTS
-            if self.openai_client.is_available():
-                with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_audio:
-                    audio_file = temp_audio.name
+            # Try TTS (OpenAI or macOS native fallback)
+            try:
+                # Try text_to_speech without file output (will use macOS 'say' directly if OpenAI unavailable)
+                result = self.openai_client.text_to_speech(selected_text, output_path=None, speed=speed)
 
-                # Generate speech
-                self.openai_client.text_to_speech(selected_text, audio_file)
+                # If result is None, it means local TTS already played the audio
+                if result is None:
+                    logger.info("✓ Local TTS playback complete")
+                else:
+                    # OpenAI TTS returned audio data, save and play it
+                    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_audio:
+                        audio_file = temp_audio.name
+                        temp_audio.write(result)
 
-                # Play the audio file with fallback options (pass char count for better timeout estimation)
-                self._play_audio_file(audio_file, char_count=char_count)
+                    # Play the audio file
+                    self._play_audio_file(audio_file, char_count=char_count)
 
-                # Clean up
-                try:
-                    os.unlink(audio_file)
-                except Exception as e:
-                    logger.warning(f"Could not delete temp audio file: {e}")
+                    # Clean up
+                    try:
+                        os.unlink(audio_file)
+                    except Exception as e:
+                        logger.warning(f"Could not delete temp audio file: {e}")
 
                 self.title = "🎙️"
                 self.status_item.title = "Status: ✓ Finished reading"
                 logger.info("✓ Finished reading text aloud")
-            else:
+
+            except Exception as e:
+                logger.error(f"TTS error: {e}")
                 self.title = "🎙️"
-                self.status_item.title = "Status: OpenAI not configured"
-                logger.warning("OpenAI client not available for TTS")
+                self.status_item.title = "Status: TTS unavailable"
 
         except Exception as e:
             logger.error(f"Error reading text aloud: {e}")
@@ -828,22 +853,28 @@ class WhisperDictationApp(rumps.App):
 
                         try:
                             self.title = "🔊 (Reading...)"
-                            self.status_item.title = "Status: Reading text aloud..."
+                            self.status_item.title = f"Status: Reading at {self.tts_speed}x speed..."
 
-                            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_audio:
-                                audio_file = temp_audio.name
+                            # Try text_to_speech (OpenAI or macOS native fallback)
+                            result = self.openai_client.text_to_speech(selected_text, output_path=None, speed=self.tts_speed)
 
-                            # Generate speech
-                            self.openai_client.text_to_speech(selected_text, audio_file)
+                            # If result is None, local TTS already played the audio
+                            if result is None:
+                                logger.info("✓ Local TTS playback complete")
+                            else:
+                                # OpenAI TTS returned audio data, save and play it
+                                with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_audio:
+                                    audio_file = temp_audio.name
+                                    temp_audio.write(result)
 
-                            # Play the audio file with fallback options (pass char count for better timeout estimation)
-                            self._play_audio_file(audio_file, char_count=char_count)
+                                # Play the audio file
+                                self._play_audio_file(audio_file, char_count=char_count)
 
-                            # Clean up
-                            try:
-                                os.unlink(audio_file)
-                            except Exception as e:
-                                logger.warning(f"Could not delete temp audio file: {e}")
+                                # Clean up
+                                try:
+                                    os.unlink(audio_file)
+                                except Exception as e:
+                                    logger.warning(f"Could not delete temp audio file: {e}")
 
                             self.title = "🎙️"
                             self.status_item.title = "Status: ✓ Finished reading"
@@ -1045,25 +1076,29 @@ class WhisperDictationApp(rumps.App):
             self.title = "🎙️"
 
     def speak_feedback(self, message):
-        """Speak feedback using TTS"""
-        if not self.openai_client.is_available():
-            logger.warning("TTS not available - skipping voice feedback")
-            return
-
+        """Speak feedback using TTS (OpenAI or macOS native fallback)"""
         try:
             self.title = "🔊"
             logger.info(f"Speaking: {message}")
 
-            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_audio:
-                audio_file = temp_audio.name
+            # Try text_to_speech (OpenAI or macOS native fallback) - use current speed setting
+            result = self.openai_client.text_to_speech(message, output_path=None, speed=self.tts_speed)
 
-            self.openai_client.text_to_speech(message, audio_file)
-            self._play_audio_file(audio_file)
+            # If result is None, local TTS already played the audio
+            if result is None:
+                logger.info("✓ Local TTS playback complete")
+            else:
+                # OpenAI TTS returned audio data, save and play it
+                with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_audio:
+                    audio_file = temp_audio.name
+                    temp_audio.write(result)
 
-            try:
-                os.unlink(audio_file)
-            except Exception as e:
-                logger.warning(f"Could not delete temp audio file: {e}")
+                self._play_audio_file(audio_file)
+
+                try:
+                    os.unlink(audio_file)
+                except Exception as e:
+                    logger.warning(f"Could not delete temp audio file: {e}")
 
             self.title = "🎙️"
         except Exception as e:
