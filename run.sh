@@ -7,7 +7,7 @@ echo "System Preferences → Privacy & Security → Privacy → Accessibility"
 echo ""
 echo "The app will now open. Look for the microphone icon (🎙️) in your menu bar."
 echo "Press the Globe/Fn key (bottom right corner of keyboard) to start/stop recording."
-echo "Or hold Right Shift to record instantly (release after 0.75s to process, before to discard)."
+echo "Or hold Right Shift to record instantly (release after 1.5s to process, before to discard)."
 echo ""
 echo "Press Ctrl+C to quit the app."
 

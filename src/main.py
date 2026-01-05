@@ -154,14 +154,14 @@ class WhisperDictationApp(rumps.App):
         # Right Shift trigger state (optimistic recording with discard threshold)
         self.shift_press_time = None
         self.shift_held = False
-        self.shift_threshold = 0.75  # Minimum hold time in seconds
+        self.shift_threshold = 1.5  # Minimum hold time in seconds (increased to avoid accidental triggers while typing)
 
         self.setup_global_monitor()
-        
+
         # Show initial message
         logger.info("Started WhisperDictation app. Look for 🎙️ in your menu bar.")
         logger.info("Press and hold the Globe/Fn key (vk=63) to record. Release to transcribe.")
-        logger.info("Alternatively, hold Right Shift to record (release after 0.75s to process, before to discard).")
+        logger.info("Alternatively, hold Right Shift to record (release after 1.5s to process, before to discard).")
         logger.info("Multi-language support: Speak in any language (Hindi, English, etc.) → Output in English")
         logger.info("Press Ctrl+C to quit the application.")
         logger.info("You may need to grant this app accessibility permissions in System Preferences.")
@@ -377,13 +377,19 @@ class WhisperDictationApp(rumps.App):
                 if hasattr(key, 'vk') and key.vk == self.trigger_key:
                     logger.debug(f"Target key (vk={key.vk}) pressed")
 
-                # Right Shift handling - start recording immediately (optimistic)
+                # Right Shift handling - mark as pressed (will start recording after delay check)
                 if key == Key.shift_r:
-                    if not self.recording:
-                        logger.info("Right Shift pressed - starting recording immediately")
+                    if not self.recording and not self.shift_held:
                         self.shift_press_time = time.time()
                         self.shift_held = True
-                        self.start_recording()
+                        # Start a thread to check if key is still held after 0.3s (to avoid accidental triggers)
+                        def delayed_recording_start():
+                            time.sleep(0.3)
+                            if self.shift_held and time.time() - self.shift_press_time >= 0.3:
+                                if not self.recording:
+                                    logger.info("Right Shift held for 0.3s - starting recording")
+                                    self.start_recording()
+                        threading.Thread(target=delayed_recording_start, daemon=True).start()
             except UnicodeDecodeError:
                 # Ignore unicode errors from special characters
                 pass
@@ -409,12 +415,18 @@ class WhisperDictationApp(rumps.App):
                     hold_duration = time.time() - self.shift_press_time
                     self.shift_held = False
 
-                    if hold_duration < self.shift_threshold:
+                    # Only log if recording was actually started (held for > 0.3s)
+                    if hold_duration < 0.3:
+                        # Released before recording even started - no need to log
+                        pass
+                    elif hold_duration < self.shift_threshold:
                         logger.info(f"Right Shift released after {hold_duration:.2f}s - discarding (< {self.shift_threshold}s)")
-                        self.discard_recording()
+                        if self.recording:
+                            self.discard_recording()
                     else:
                         logger.info(f"Right Shift released after {hold_duration:.2f}s - processing")
-                        self.stop_recording()
+                        if self.recording:
+                            self.stop_recording()
             except UnicodeDecodeError:
                 # Ignore unicode errors from special characters
                 pass

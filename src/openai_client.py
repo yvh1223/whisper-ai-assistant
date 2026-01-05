@@ -325,35 +325,14 @@ Please modify the selected text according to the voice instruction. Return only 
 
     def text_to_speech(self, text, output_path=None, speed=1.0):
         """
-        Convert text to speech using OpenAI TTS with fallback to macOS native 'say' command.
-        If output_path is provided, saves to file. Otherwise returns audio data.
+        Convert text to speech using macOS native 'say' command (primary) or OpenAI TTS (if explicitly enabled).
 
         Args:
             text: Text to convert to speech
             output_path: Optional file path to save audio
             speed: Playback speed multiplier (1.0 = normal, 1.2 = 20% faster, etc.)
         """
-        # Try OpenAI TTS first if client is available
-        # Note: OpenAI TTS doesn't support speed control via API, so we ignore speed for OpenAI
-        if self.client:
-            try:
-                response = self.client.audio.speech.create(
-                    model=self.tts_model,
-                    voice=self.tts_voice,
-                    input=text
-                )
-
-                if output_path:
-                    response.stream_to_file(output_path)
-                    logger.info(f"TTS audio saved to: {output_path}")
-                    return output_path
-                else:
-                    return response.content
-
-            except Exception as e:
-                logger.warning(f"OpenAI TTS failed ({e}), falling back to macOS native TTS...")
-
-        # Fallback to macOS native 'say' command (local, FREE)
+        # Use macOS native 'say' command as PRIMARY (local, FREE, supports speed control)
         try:
             import subprocess
 
@@ -377,7 +356,7 @@ Please modify the selected text according to the voice instruction. Return only 
 
         except Exception as e:
             logger.error(f"Error with local macOS TTS: {e}")
-            raise Exception("Both OpenAI TTS and macOS native TTS failed")
+            raise Exception("macOS native TTS failed")
 
     def parse_task_command(self, text, current_date):
         """
