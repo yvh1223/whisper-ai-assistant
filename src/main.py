@@ -47,7 +47,15 @@ signal.signal(signal.SIGTERM, signal_handler)
 class WhisperDictationApp(rumps.App):
     def __init__(self):
         super(WhisperDictationApp, self).__init__("🎙️", quit_button=rumps.MenuItem("Quit"))
-        
+
+        # Set microphone input volume to 100% on startup
+        try:
+            subprocess.run(['osascript', '-e', 'set volume input volume 100'],
+                         check=True, capture_output=True, timeout=2)
+            logger.info("✓ Microphone input volume set to 100%")
+        except Exception as e:
+            logger.warning(f"Could not set input volume: {e}")
+
         # Status item
         self.status_item = rumps.MenuItem("Status: Ready")
         
@@ -68,7 +76,7 @@ class WhisperDictationApp(rumps.App):
         self.max_recording_duration = 15 * 60  # 15 minutes in seconds
 
         # Microphone selection (None = use default)
-        self.selected_input_device = None
+        self.selected_input_device = None  # Use default (MacBook Pro Microphone)
 
         # Create microphone selection submenu
         self.mic_menu = {}
