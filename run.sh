@@ -7,7 +7,6 @@ echo "System Preferences → Privacy & Security → Privacy → Accessibility"
 echo ""
 echo "The app will now open. Look for the microphone icon (🎙️) in your menu bar."
 echo "Press the Globe/Fn key (bottom right corner of keyboard) to start/stop recording."
-echo "Right Shift: Select text → Press once to play → Press again to stop TTS"
 echo ""
 echo "Press Ctrl+C to quit the app."
 
@@ -28,6 +27,7 @@ fi
 USE_LOCAL=false
 LOCAL_MODEL="large-v3"
 TTS_SPEED="1"
+TTS_ENABLED=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -45,6 +45,10 @@ while [[ $# -gt 0 ]]; do
             TTS_SPEED="$2"
             shift 2
             ;;
+        --tts-on)
+            TTS_ENABLED=true
+            shift 1
+            ;;
         *)
             shift
             ;;
@@ -61,15 +65,25 @@ if [ "$USE_LOCAL" = true ]; then
     echo "First run will download model to ~/.cache/huggingface/hub/"
 fi
 
-# Set TTS playback speed
-# Valid options: 1, 1.25, 1.5, 2 (default: 1)
-export TTS_SPEED="$TTS_SPEED"
-if [[ "$TTS_SPEED" =~ ^(1|1.25|1.5|2)$ ]]; then
-    echo "TTS playback speed: ${TTS_SPEED}x"
+# Set TTS enabled/disabled
+export TTS_ENABLED="$TTS_ENABLED"
+if [ "$TTS_ENABLED" = true ]; then
+    echo ""
+    echo "✓ TTS enabled"
+    # Set TTS playback speed
+    # Valid options: 1, 1.25, 1.5, 2 (default: 1)
+    export TTS_SPEED="$TTS_SPEED"
+    if [[ "$TTS_SPEED" =~ ^(1|1.25|1.5|2)$ ]]; then
+        echo "  TTS playback speed: ${TTS_SPEED}x"
+    else
+        echo "⚠️  Warning: Invalid TTS speed '$TTS_SPEED', using default 1x"
+        export TTS_SPEED="1"
+    fi
 else
-    echo "Warning: Invalid TTS speed '$TTS_SPEED', using default 1x"
-    export TTS_SPEED="1"
+    echo ""
+    echo "✓ TTS disabled (use --tts-on to enable)"
 fi
 
+echo ""
 # Run with venv Python
 python src/main.py

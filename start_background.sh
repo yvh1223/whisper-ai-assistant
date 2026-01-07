@@ -25,12 +25,61 @@ if [ -f "$SCRIPT_DIR/zscaler_root.pem" ]; then
     export REQUESTS_CA_BUNDLE="$SCRIPT_DIR/zscaler_root.pem"
 fi
 
-# Check for --use-local flag to enable MLX Whisper
-if [[ "$1" == "--use-local" ]]; then
+# Parse command-line arguments
+USE_LOCAL=false
+LOCAL_MODEL="large-v3"
+TTS_SPEED="1"
+TTS_ENABLED=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --use-local)
+            USE_LOCAL=true
+            # Only consume next arg as model if it doesn't start with --
+            if [[ $# -gt 1 ]] && [[ "$2" != --* ]]; then
+                LOCAL_MODEL="$2"
+                shift 2
+            else
+                shift 1
+            fi
+            ;;
+        --tts-speed)
+            TTS_SPEED="$2"
+            shift 2
+            ;;
+        --tts-on)
+            TTS_ENABLED=true
+            shift 1
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+# Enable MLX Whisper if requested
+if [ "$USE_LOCAL" = true ]; then
     echo "✓ MLX Whisper mode enabled (local transcription)"
     export USE_MLX_WHISPER=true
-    export MLX_WHISPER_MODEL="${2:-large-v3}"
+    export MLX_WHISPER_MODEL="$LOCAL_MODEL"
     echo "  Model: ${MLX_WHISPER_MODEL}"
+fi
+
+# Set TTS enabled/disabled
+export TTS_ENABLED="$TTS_ENABLED"
+if [ "$TTS_ENABLED" = true ]; then
+    echo "✓ TTS enabled"
+    # Set TTS playback speed
+    # Valid options: 1, 1.25, 1.5, 2 (default: 1)
+    export TTS_SPEED="$TTS_SPEED"
+    if [[ "$TTS_SPEED" =~ ^(1|1.25|1.5|2)$ ]]; then
+        echo "  TTS playback speed: ${TTS_SPEED}x"
+    else
+        echo "⚠️  Warning: Invalid TTS speed '$TTS_SPEED', using default 1x"
+        export TTS_SPEED="1"
+    fi
+else
+    echo "✓ TTS disabled (use --tts-on to enable)"
 fi
 
 echo "✓ Starting app with menu bar icon 🎙️"

@@ -72,15 +72,23 @@ class WhisperDictationApp(rumps.App):
         # Microphone selection (None = use default)
         self.selected_input_device = None
 
+        # TTS enabled flag - check environment variable (must be before TTS menu items)
+        self.tts_enabled = os.getenv('TTS_ENABLED', 'false').lower() == 'true'
+
         # Create microphone selection submenu
         self.mic_menu = {}
         self.mic_menu_mapping = {}  # Maps menu title to device index
         self.setup_microphone_menu()
 
-        # Add TTS menu items
+        # Add TTS menu items (only if enabled)
         self.tts_menu_item = rumps.MenuItem("Read Selected Text Aloud")
         self.stop_tts_menu_item = rumps.MenuItem("Stop Reading")
         self.stop_tts_menu_item.set_callback(self.stop_tts)
+
+        # Disable TTS menu items if TTS is disabled
+        if not self.tts_enabled:
+            self.tts_menu_item.title = None  # Hide from menu
+            self.stop_tts_menu_item.title = None  # Hide from menu
 
         # Track current audio playback process
         self.current_audio_process = None
@@ -142,9 +150,9 @@ class WhisperDictationApp(rumps.App):
         # Hotkey configuration - we'll listen for globe/fn key (vk=63)
         self.trigger_key = 63  # Key code for globe/fn key
 
-        # Right Shift trigger state for TTS on/off toggle
-        self.shift_press_time = None
-        self.shift_held = False
+        # F5 trigger state for TTS on/off toggle
+        self.f5_press_time = None
+        self.f5_held = False
 
         # TTS speed controller - read speed from environment or use default
         tts_speed = float(os.getenv('TTS_SPEED', '1.0'))
@@ -155,8 +163,11 @@ class WhisperDictationApp(rumps.App):
         # Show initial message
         logger.info("Started WhisperDictation app. Look for 🎙️ in your menu bar.")
         logger.info("Press and hold the Globe/Fn key (vk=63) to record. Release to transcribe.")
-        logger.info("Right Shift: Select text → Press once to play → Press again to stop")
-        logger.info("  - Speed preset at startup (use --tts-speed flag: 1, 1.25, 1.5, 2)")
+        if self.tts_enabled:
+            logger.info("F5: Select text → Press once to play → Press again to stop")
+            logger.info("  - Speed preset at startup (use --tts-speed flag: 1, 1.25, 1.5, 2)")
+        else:
+            logger.info("Text-to-speech is disabled. Enable with --tts-on flag.")
         logger.info("Multi-language support: Speak in any language (Hindi, English, etc.) → Output in English")
         logger.info("Press Ctrl+C to quit the application.")
         logger.info("You may need to grant this app accessibility permissions in System Preferences.")
@@ -440,10 +451,10 @@ class WhisperDictationApp(rumps.App):
 
         def on_press(key):
             try:
-                # If Right Shift is held and another key is pressed, cancel recording (user is typing)
-                if self.shift_held and key != Key.shift_r:
-                    logger.info("Other key pressed while Right Shift held - canceling recording")
-                    self.shift_held = False
+                # If F5 is held and another key is pressed, cancel recording (user is typing)
+                if self.f5_held and key != Key.f5:
+                    logger.info("Other key pressed while F5 held - canceling recording")
+                    self.f5_held = False
                     self.discard_recording()
                     return
 
@@ -451,15 +462,15 @@ class WhisperDictationApp(rumps.App):
                 if hasattr(key, 'vk') and key.vk == self.trigger_key:
                     logger.debug(f"Target key (vk={key.vk}) pressed")
 
-                # Right Shift handling - toggle TTS on/off
-                if key == Key.shift_r:
+                # F5 handling - toggle TTS on/off (if enabled)
+                if key == Key.f5 and self.tts_enabled:
                     if self.tts_controller.is_playing:
-                        logger.info("⏹ Right Shift pressed - stopping TTS playback")
+                        logger.info("⏹ F5 pressed - stopping TTS playback")
                         self.tts_controller.stop()
                     else:
-                        logger.info("▶ Right Shift pressed - checking for selected text")
+                        logger.info("▶ F5 pressed - checking for selected text")
                         self.handle_shift_tts()
-                    logger.debug("Right Shift handling completed")
+                    logger.debug("F5 handling completed")
             except UnicodeDecodeError:
                 # Ignore unicode errors from special characters
                 pass
