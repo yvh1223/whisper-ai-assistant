@@ -197,9 +197,45 @@ NO_COLOR=false                       # true = disable colored logs
 
 ## macOS Permissions
 
-Grant in **System Preferences → Security & Privacy → Privacy**:
-- **Microphone** - for audio recording
-- **Accessibility** - for keyboard shortcuts and text pasting
+**CRITICAL**: Three permissions required in **System Settings → Privacy & Security**:
+
+1. **Accessibility** - for keyboard shortcuts (Globe/Fn, Right Shift) and text pasting
+2. **Microphone** - for audio recording
+3. **Input Monitoring** - for keyboard event detection (REQUIRED for Globe/Fn key)
+
+### Setup Instructions
+
+1. Open **System Settings** (Apple menu → System Settings)
+2. Navigate to **Privacy & Security** (scroll down in left sidebar)
+3. Enable all three permissions for your terminal app (Terminal, iTerm2, VS Code, etc.):
+
+   **A) Accessibility**
+   - Click "Accessibility" in right panel
+   - Find your terminal app
+   - Toggle ON (blue switch)
+   - If already on, toggle OFF then ON to refresh
+
+   **B) Microphone**
+   - Go back, click "Microphone"
+   - Find your terminal app
+   - Toggle ON
+
+   **C) Input Monitoring** ⚠️ **CRITICAL**
+   - Go back, click "Input Monitoring"
+   - Find your terminal app
+   - Toggle ON
+   - **This is required for Globe/Fn key detection!**
+
+4. **Restart your terminal** (Cmd+Q, then reopen)
+5. Run `./run.sh` to start the app
+
+### Troubleshooting Permissions
+
+If keyboard shortcuts don't work after 30 seconds:
+- Check if "Input Monitoring" is enabled
+- Try toggling Accessibility OFF then ON
+- Fully quit and restart your terminal (Cmd+Q)
+- The app will show detailed instructions in the terminal if permissions are missing
 
 ## Known Limitations
 

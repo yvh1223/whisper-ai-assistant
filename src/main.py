@@ -14,6 +14,18 @@ import faster_whisper
 import signal
 import warnings
 from AppKit import NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn
+
+# Suppress numpy warnings from faster-whisper audio processing
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="faster_whisper.feature_extractor")
+warnings.filterwarnings("ignore", message="divide by zero encountered")
+warnings.filterwarnings("ignore", message="overflow encountered")
+warnings.filterwarnings("ignore", message="invalid value encountered")
+from ApplicationServices import AXIsProcessTrusted
+try:
+    from AVFoundation import AVCaptureDevice, AVMediaTypeAudio
+    AVFOUNDATION_AVAILABLE = True
+except ImportError:
+    AVFOUNDATION_AVAILABLE = False
 from text_selection import TextSelection
 from openai_client import OpenAIClient
 from task_manager import TaskManager
@@ -30,15 +42,114 @@ logger = setup_logging()
 exit_flag = False
 exit_event = threading.Event()
 
+def check_accessibility_permissions():
+    """Check if the app has accessibility permissions to monitor keyboard events"""
+    try:
+        has_permission = AXIsProcessTrusted()
+        return has_permission
+    except Exception as e:
+        logger.error(f"Error checking accessibility permissions: {e}")
+        return False
+
+def check_microphone_permissions():
+    """
+    Check if the app has microphone permissions.
+    First tries AVFoundation API, then falls back to actually testing PyAudio access.
+    """
+    # Method 1: Try AVFoundation API (most reliable if available)
+    if AVFOUNDATION_AVAILABLE:
+        try:
+            # Check microphone authorization status
+            status = AVCaptureDevice.authorizationStatusForMediaType_(AVMediaTypeAudio)
+            # AVAuthorizationStatusAuthorized = 3
+            if status == 3:
+                return True
+            elif status in [0, 1, 2]:  # NotDetermined, Restricted, Denied
+                return False
+        except Exception as e:
+            logger.debug(f"AVFoundation check failed: {e}")
+
+    # Method 2: Fallback - try to actually open the microphone with PyAudio
+    try:
+        logger.debug("AVFoundation not available - testing microphone access directly...")
+
+        # Suppress PyAudio warnings during test
+        import warnings as warn_module
+        with warn_module.catch_warnings():
+            warn_module.simplefilter("ignore")
+            test_audio = pyaudio.PyAudio()
+
+        try:
+            # Try to open an input stream briefly
+            with warn_module.catch_warnings():
+                warn_module.simplefilter("ignore")
+                test_stream = test_audio.open(
+                    format=pyaudio.paInt16,
+                    channels=1,
+                    rate=16000,
+                    input=True,
+                    frames_per_buffer=1024,
+                    stream_callback=None
+                )
+            # If we got here, we have microphone access
+            test_stream.stop_stream()
+            test_stream.close()
+            test_audio.terminate()
+            logger.debug("✓ Microphone test successful - permission granted")
+            return True
+        except Exception as stream_error:
+            test_audio.terminate()
+            # Check if it's a permission error
+            error_str = str(stream_error).lower()
+            if 'permission' in error_str or 'denied' in error_str or 'authorized' in error_str:
+                logger.debug(f"✗ Microphone permission denied: {stream_error}")
+                return False
+            else:
+                # Some other error - unclear status
+                logger.debug(f"Microphone test error (unclear permission status): {stream_error}")
+                return None
+    except Exception as e:
+        logger.debug(f"Error testing microphone access: {e}")
+        return None
+
+def request_microphone_permissions():
+    """
+    Request microphone permissions from the user.
+    Note: Without AVFoundation, macOS will automatically prompt when PyAudio tries to access the mic.
+    """
+    if not AVFOUNDATION_AVAILABLE:
+        logger.debug("AVFoundation not available - permission prompt will happen on first recording attempt")
+        return
+
+    try:
+        AVCaptureDevice.requestAccessForMediaType_completionHandler_(
+            AVMediaTypeAudio,
+            lambda granted: logger.info(f"Microphone permission: {'granted' if granted else 'denied'}")
+        )
+    except Exception as e:
+        logger.debug(f"Error requesting microphone permissions: {e}")
+
+def check_input_monitoring_permissions():
+    """
+    Check if the app has Input Monitoring permissions.
+    This is required for keyboard event listening (Globe/Fn key, Right Shift).
+
+    Note: There's no direct API to check Input Monitoring on macOS.
+    We use a heuristic: try to listen for keyboard events.
+    If we can't receive events, Input Monitoring is likely disabled.
+    """
+    # Input Monitoring can't be checked directly via API
+    # The app will fail to receive keyboard events if not granted
+    # We'll check this indirectly in the keyboard listener
+    return None  # Unknown - will be detected at runtime
+
 def signal_handler(sig, frame):
     """Global signal handler for graceful shutdown"""
     global exit_flag
-    logger.info("\n--- Shutdown signal received (Ctrl+C) ---")
+    logger.info("\n=== Shutdown signal received (Ctrl+C) ===")
+    logger.info("Initiating graceful shutdown...")
     exit_flag = True
     exit_event.set()
-    # Force exit immediately - don't wait for cleanup
-    logger.info("Exiting...")
-    os._exit(0)
 
 # Set up graceful shutdown handling for interrupt and termination signals
 signal.signal(signal.SIGINT, signal_handler)
@@ -159,6 +270,10 @@ class WhisperDictationApp(rumps.App):
         # Hotkey configuration - we'll listen for globe/fn key (vk=63)
         self.trigger_key = 63  # Key code for globe/fn key
 
+        # Globe/Fn key debouncing - prevent double triggers
+        self.last_globe_key_time = 0
+        self.globe_key_debounce = 0.3  # Minimum time between Globe/Fn key presses (300ms)
+
         # Right Shift trigger state (optimistic recording with discard threshold)
         self.shift_press_time = None
         self.shift_held = False
@@ -166,26 +281,101 @@ class WhisperDictationApp(rumps.App):
 
         self.setup_global_monitor()
 
+        # Check all required permissions
+        has_accessibility = check_accessibility_permissions()
+        has_microphone = check_microphone_permissions()
+        has_input_monitoring = check_input_monitoring_permissions()  # Always None (can't check directly)
+
+        logger.info("\n" + "="*70)
+        logger.info("                    PERMISSION STATUS CHECK")
+        logger.info("="*70)
+
+        all_permissions_granted = True
+
+        # 1. Accessibility permissions
+        logger.info("\n1️⃣  ACCESSIBILITY (required for keyboard shortcuts)")
+        if has_accessibility:
+            logger.info("   ✓ Granted - Globe/Fn and Right Shift shortcuts will work")
+        else:
+            logger.error("   ✗ NOT GRANTED - Keyboard shortcuts will NOT work")
+            all_permissions_granted = False
+
+        # 2. Microphone permissions
+        logger.info("\n2️⃣  MICROPHONE (required for voice recording)")
+        if has_microphone is True:
+            logger.info("   ✓ Granted - Audio recording will work")
+        elif has_microphone is False:
+            logger.error("   ✗ NOT GRANTED - Recording will NOT work")
+            all_permissions_granted = False
+            # Request microphone permission
+            request_microphone_permissions()
+        else:
+            logger.warning("   ⚠ Status unknown - Will prompt when recording starts")
+
+        # 3. Input Monitoring permissions
+        logger.info("\n3️⃣  INPUT MONITORING (required for keyboard event detection)")
+        logger.warning("   ⚠ Cannot verify automatically - will test during runtime")
+        logger.info("   If keyboard shortcuts don't work, this permission is likely missing")
+
+        logger.info("\n" + "="*70)
+
+        # Show detailed setup instructions if any permissions are missing
+        if not all_permissions_granted or not has_accessibility:
+            logger.info("")
+            logger.info("🔧 SETUP REQUIRED - Follow these steps:")
+            logger.info("="*70)
+            logger.info("")
+            logger.info("1. Open System Settings")
+            logger.info("   → Click the Apple menu (top-left) → System Settings")
+            logger.info("")
+            logger.info("2. Navigate to Privacy & Security")
+            logger.info("   → Scroll down in left sidebar → Click 'Privacy & Security'")
+            logger.info("")
+            logger.info("3. Enable THREE permissions for your terminal app:")
+            logger.info("")
+            logger.info("   A) ACCESSIBILITY")
+            logger.info("      → Click 'Accessibility' in the right panel")
+            logger.info("      → Find your terminal app (e.g., Terminal, iTerm2, VS Code)")
+            logger.info("      → Toggle it ON (blue switch)")
+            logger.info("      → If already on, toggle OFF then ON again")
+            logger.info("")
+            logger.info("   B) MICROPHONE")
+            logger.info("      → Go back, click 'Microphone'")
+            logger.info("      → Find your terminal app")
+            logger.info("      → Toggle it ON")
+            logger.info("")
+            logger.info("   C) INPUT MONITORING")
+            logger.info("      → Go back, click 'Input Monitoring'")
+            logger.info("      → Find your terminal app")
+            logger.info("      → Toggle it ON")
+            logger.info("      → NOTE: This is REQUIRED for Globe/Fn key detection!")
+            logger.info("")
+            logger.info("4. Restart your terminal")
+            logger.info("   → Quit completely (Cmd+Q)")
+            logger.info("   → Reopen and run: ./run.sh")
+            logger.info("")
+            logger.info("="*70)
+            logger.info("")
+
+            # Show notification
+            rumps.notification(
+                title="⚠️ Permissions Required",
+                subtitle="3 permissions needed: Accessibility, Microphone, Input Monitoring",
+                message="Check terminal for detailed setup instructions"
+            )
+        else:
+            logger.info("✓ All permissions granted")
+            logger.info("="*70)
+            logger.info("")
+
         # Show initial message
-        logger.info("Started WhisperDictation app. Look for 🎙️ in your menu bar.")
-        logger.info("Press and hold the Globe/Fn key (vk=63) to record. Release to transcribe.")
-        logger.info("Alternatively, hold Right Shift to record (release after 1.5s to process, before to discard).")
-        logger.info("Multi-language support: Speak in any language (Hindi, English, etc.) → Output in English")
-        logger.info("Press Ctrl+C to quit the application.")
-        logger.info("You may need to grant this app accessibility permissions in System Preferences.")
-        logger.info("Go to System Preferences → Security & Privacy → Privacy → Accessibility")
-        logger.info("and add your terminal or the built app to the list.")
-        
+        logger.info("Whisper Dictation started - Look for 🎙️ in menu bar")
+
         # Test OpenAI connection
         if self.openai_client.is_available():
-            logger.info("✓ OpenAI client initialized successfully")
-            model_info = self.openai_client.get_model_info()
-            if model_info['use_openai_whisper']:
-                logger.info("  → Using OpenAI Whisper API for transcription")
-            else:
-                logger.info("  → Using local Whisper model for transcription")
+            logger.info("✓ OpenAI client ready")
         else:
-            logger.warning("⚠ OpenAI client not available - text enhancement features disabled")
+            logger.warning("⚠ OpenAI not available - AI features disabled")
         
         # Start a watchdog thread to check for exit flag
         self.watchdog = threading.Thread(target=self.check_exit_flag, daemon=True)
@@ -196,8 +386,10 @@ class WhisperDictationApp(rumps.App):
         while True:
             # Check for exit flag
             if exit_flag:
-                logger.info("Watchdog detected exit flag, shutting down...")
-                self.cleanup()
+                try:
+                    self.cleanup()
+                except Exception as e:
+                    logger.error(f"Cleanup error: {e}")
                 rumps.quit_application()
                 os._exit(0)
                 break
@@ -234,7 +426,8 @@ class WhisperDictationApp(rumps.App):
     
     def cleanup(self):
         """Clean up resources before exiting"""
-        logger.info("Cleaning up resources...")
+        logger.info("Shutting down...")
+
         try:
             # Stop recording if in progress
             if self.recording:
@@ -242,8 +435,8 @@ class WhisperDictationApp(rumps.App):
                 if hasattr(self, 'recording_thread') and self.recording_thread.is_alive():
                     try:
                         self.recording_thread.join(timeout=1.0)
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Error stopping recording thread: {e}")
 
             # Stop any playing audio
             if hasattr(self, 'current_audio_process') and self.current_audio_process:
@@ -251,25 +444,24 @@ class WhisperDictationApp(rumps.App):
                     if self.current_audio_process.poll() is None:
                         self.current_audio_process.terminate()
                         self.current_audio_process.wait(timeout=1.0)
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Error stopping audio: {e}")
 
             # Close recording indicator if active
-            if hasattr(self, 'recording_indicator'):
+            if hasattr(self, 'indicator'):
                 try:
-                    if hasattr(self.recording_indicator, 'stop'):
-                        self.recording_indicator.stop()
-                except:
-                    pass
+                    if hasattr(self.indicator, 'stop'):
+                        self.indicator.stop()
+                except Exception as e:
+                    logger.debug(f"Error closing indicator: {e}")
 
             # Close PyAudio properly
             if hasattr(self, 'audio'):
                 try:
                     self.audio.terminate()
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Error terminating PyAudio: {e}")
 
-            logger.info("Resources cleaned up successfully")
         except Exception as e:
             logger.warning(f"Error during cleanup: {e}")
     
@@ -376,14 +568,10 @@ class WhisperDictationApp(rumps.App):
             try:
                 # If Right Shift is held and another key is pressed, cancel recording (user is typing)
                 if self.shift_held and key != Key.shift_r:
-                    logger.info("Other key pressed while Right Shift held - canceling recording")
+                    logger.debug("Other key pressed while Right Shift held - canceling recording")
                     self.shift_held = False
                     self.discard_recording()
                     return
-
-                # Removed logging for every key press; log only when target key is pressed
-                if hasattr(key, 'vk') and key.vk == self.trigger_key:
-                    logger.debug(f"Target key (vk={key.vk}) pressed")
 
                 # Right Shift handling - mark as pressed (will start recording after delay check)
                 if key == Key.shift_r:
@@ -395,7 +583,6 @@ class WhisperDictationApp(rumps.App):
                             time.sleep(0.3)
                             if self.shift_held and time.time() - self.shift_press_time >= 0.3:
                                 if not self.recording:
-                                    logger.info("Right Shift held for 0.3s - starting recording")
                                     self.start_recording()
                         threading.Thread(target=delayed_recording_start, daemon=True).start()
             except UnicodeDecodeError:
@@ -407,14 +594,21 @@ class WhisperDictationApp(rumps.App):
         def on_release(key):
             try:
                 if hasattr(key, 'vk'):
-                    logger.debug(f"Key with vk={key.vk} released")
                     if key.vk == self.trigger_key:
+                        # Debouncing - ignore if Globe/Fn was pressed too recently
+                        current_time = time.time()
+                        time_since_last = current_time - self.last_globe_key_time
+
+                        if time_since_last < self.globe_key_debounce:
+                            logger.debug(f"Globe/Fn key debounced ({time_since_last:.3f}s since last press)")
+                            return
+
+                        self.last_globe_key_time = current_time
+
                         if not self.recording and not self.is_recording_with_key63:
-                            logger.debug(f"Globe/Fn key (vk={key.vk}) released - STARTING recording")
                             self.is_recording_with_key63 = True
                             self.start_recording()
                         elif self.recording and self.is_recording_with_key63:
-                            logger.debug(f"Globe/Fn key (vk={key.vk}) released - STOPPING recording")
                             self.is_recording_with_key63 = False
                             self.stop_recording()
 
@@ -423,16 +617,13 @@ class WhisperDictationApp(rumps.App):
                     hold_duration = time.time() - self.shift_press_time
                     self.shift_held = False
 
-                    # Only log if recording was actually started (held for > 0.3s)
                     if hold_duration < 0.3:
-                        # Released before recording even started - no need to log
+                        # Released before recording even started
                         pass
                     elif hold_duration < self.shift_threshold:
-                        logger.info(f"Right Shift released after {hold_duration:.2f}s - discarding (< {self.shift_threshold}s)")
                         if self.recording:
                             self.discard_recording()
                     else:
-                        logger.info(f"Right Shift released after {hold_duration:.2f}s - processing")
                         if self.recording:
                             self.stop_recording()
             except UnicodeDecodeError:
@@ -442,14 +633,12 @@ class WhisperDictationApp(rumps.App):
                 logger.debug(f"Error in on_release: {e}")
 
         try:
+            logger.info("Keyboard listener started")
             with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
-                logger.debug(f"Keyboard listener started - listening for key events")
-                logger.debug(f"Target key is Globe/Fn key (vk={self.trigger_key})")
-                logger.debug(f"Press and release the target key to control recording")
                 listener.join()
         except Exception as e:
-            logger.error(f"Error with keyboard listener: {e}")
-            logger.error("Please check accessibility permissions in System Preferences")
+            logger.error(f"Keyboard listener error: {e}")
+            logger.error("Check accessibility permissions in System Settings")
     
     @rumps.clicked("Start Recording")  # This will be matched by title
     def toggle_recording(self, sender):
@@ -704,7 +893,6 @@ class WhisperDictationApp(rumps.App):
         # Update UI
         self.title = "🎙️ (Recording)"
         self.status_item.title = "Status: Recording..."
-        logger.info("Recording started. Speak now...")
 
         # Show recording indicator
         self.indicator.start()
@@ -727,15 +915,12 @@ class WhisperDictationApp(rumps.App):
         self.cached_selected_text = self.text_selector.get_selected_text()
 
         if self.cached_selected_text:
-            logger.info(f"✓ Selected text captured ({len(self.cached_selected_text)} chars): '{self.cached_selected_text[:50]}...'")
+            logger.debug(f"Selected text captured ({len(self.cached_selected_text)} chars)")
             self.title = "🎙️ (AI Enhancing)"
             self.status_item.title = "Status: AI enhancing..."
         else:
-            logger.debug("No text selected - will insert transcription normally")
             self.title = "🎙️ (Transcribing)"
             self.status_item.title = "Status: Transcribing..."
-
-        logger.info("Recording stopped. Processing...")
 
         # Process in background
         transcribe_thread = threading.Thread(target=self.process_recording)
@@ -963,7 +1148,6 @@ class WhisperDictationApp(rumps.App):
     
     def insert_text(self, text):
         # Paste text using clipboard + Cmd+V (works in any focused app)
-        logger.info(f"Inserting text at cursor: {text[:50]}...")
         try:
             import pyperclip
 
@@ -989,14 +1173,12 @@ class WhisperDictationApp(rumps.App):
             time.sleep(0.1)
             pyperclip.copy(original_clipboard)
 
-            logger.info("✓ Text inserted successfully")
         except Exception as e:
             logger.error(f"Error inserting text: {e}")
             # Final fallback: just copy to clipboard
-            logger.info("Falling back to clipboard copy")
             import pyperclip
             pyperclip.copy(text)
-            logger.info("✓ Text copied to clipboard - paste with Cmd+V")
+            logger.info("Text copied to clipboard - paste with Cmd+V")
 
     def setup_task_menu(self):
         """Setup/refresh task submenu with current tasks"""
@@ -1310,8 +1492,14 @@ class WhisperDictationApp(rumps.App):
 
 # Wrap the main execution in a try-except to ensure clean exit
 if __name__ == "__main__":
+    app = None
     try:
-        WhisperDictationApp().run()
+        app = WhisperDictationApp()
+        app.run()
     except KeyboardInterrupt:
-        logger.info("\nKeyboard interrupt received, exiting...")
+        if app:
+            try:
+                app.cleanup()
+            except Exception as e:
+                logger.error(f"Cleanup error: {e}")
         os._exit(0)

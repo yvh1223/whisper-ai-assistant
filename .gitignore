@@ -10,3 +10,27 @@ archive/
 venv/
 *_root.pem
 zscaler*.pem
+
+# macOS
+.DS_Store
+
+# Temporary files
+*.pyc
+*.pyo
+*.tmp
+*.temp
+
+# Test/debug files
+test_*.py
+*_test.py
+debug_*.py
+
+# Temporary documentation (keep official docs)
+*_FIX.md
+*_DEBUG.md
+*_TEMP.md
+
+# Screenshots/images (unless specifically needed)
+screenshot*.png
+debug*.png
+test*.png

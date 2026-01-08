@@ -31,12 +31,10 @@ class RecordingIndicator:
         self.running = True
         self.audio_levels = []
         self.current_frame = 0
-        logger.info("Recording indicator started")
 
     def stop(self):
         """Stop the recording indicator"""
         self.running = False
-        logger.info("Recording indicator stopped")
 
     def update_audio_level(self, audio_data):
         """Update the audio level based on incoming audio data

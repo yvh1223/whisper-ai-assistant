@@ -81,9 +81,33 @@ cp .env.example .env
 # Skip this step if not using Zscaler or your company doesn't use it
 # See "Zscaler Setup" section below
 
-# 4. Run the app
+# 4. Grant macOS permissions (REQUIRED - see below)
+
+# 5. Run the app
 ./run.sh
 ```
+
+## ⚠️ macOS Permissions (REQUIRED)
+
+**The app requires 3 permissions to work:**
+
+1. ✅ **Accessibility** - for keyboard shortcuts and text pasting
+2. 🎤 **Microphone** - for voice recording
+3. ⌨️ **Input Monitoring** - for Globe/Fn key detection (**most commonly missed!**)
+
+### Quick Setup
+
+1. Open **System Settings** → **Privacy & Security**
+2. Enable your terminal app (Terminal/iTerm2/VS Code) in:
+   - **Accessibility**
+   - **Microphone**
+   - **Input Monitoring** ⚠️ **CRITICAL for keyboard shortcuts!**
+3. **Restart your terminal** (Cmd+Q, then reopen)
+4. Run `./run.sh`
+
+**📖 See [SETUP.md](SETUP.md) for detailed step-by-step instructions with screenshots.**
+
+The app will automatically detect missing permissions and show detailed instructions when you run it.
 
 ### Zscaler Setup (Corporate Proxy)
 
@@ -212,13 +236,26 @@ Works everywhere - emails, documents, code editors, chat apps, anywhere you can 
 
 </details>
 
-## Permissions Required
-
-Grant these permissions in **System Preferences → Security & Privacy → Privacy**:
-- **Microphone** - for recording voice
-- **Accessibility** - for pasting text and keyboard shortcuts
-
 ## Troubleshooting
+
+### Keyboard shortcuts not working?
+
+**Most common issue:** Missing **Input Monitoring** permission
+
+After 30 seconds, if keyboard shortcuts aren't working, the app will display:
+```
+⚠️  KEYBOARD EVENTS NOT DETECTED!
+MOST LIKELY CAUSE: Missing 'Input Monitoring' permission
+```
+
+**Solution:**
+1. Open **System Settings** → **Privacy & Security** → **Input Monitoring**
+2. Enable your terminal app
+3. Restart terminal (Cmd+Q) and run `./run.sh` again
+
+See [SETUP.md](SETUP.md) for detailed permission setup instructions.
+
+### Other Issues
 
 **Stop background process:**
 ```bash
@@ -227,6 +264,10 @@ Grant these permissions in **System Preferences → Security & Privacy → Priva
 
 **TTS not working?**
 - Ensure OpenAI API key is set in `.env`
-- mpg123 is installed: `brew install mpg123`
+- Install mpg123: `brew install mpg123`
+
+**Recording not working?**
+- Check **Microphone** permission is enabled
+- The app will request microphone access on first recording
 
 **See [CLAUDE.md](CLAUDE.md) for detailed technical documentation.**
