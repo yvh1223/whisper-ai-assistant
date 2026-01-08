@@ -34,3 +34,7 @@ debug_*.py
 screenshot*.png
 debug*.png
 test*.png
+
+# Local git helper scripts (personal workflow)
+git-push.sh
+PUSH_GUIDE.md
